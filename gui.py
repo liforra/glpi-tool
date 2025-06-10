@@ -10,6 +10,14 @@ import threading
 import json
 import sys
 
+# Add PIL import for image handling
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    logging.warning("PIL/Pillow not found. Eye icons will use fallback text.")
+
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
@@ -358,6 +366,7 @@ class ThemeManager:
                 )
             except:
                 pass  # Some widgets might not exist or support all options
+
 class CustomCheckbox(tk.Frame):
     def __init__(self, parent, text, variable, **kwargs):
         super().__init__(parent, bg="#201a2b", **kwargs)
@@ -432,6 +441,100 @@ class CustomCheckbox(tk.Frame):
                 capstyle=tk.ROUND
             )
 
+class CustomEyeButton(tk.Frame):
+    def __init__(self, parent, command, **kwargs):
+        # Initialize the parent Frame with the widget background color
+        super().__init__(parent, bg="#302a40", **kwargs)
+        self.command = command
+        self.visible = False
+        
+        # Load and store image references to prevent garbage collection
+        self.open_icon = None
+        self.closed_icon = None
+        self.has_icons = False
+        
+        if PIL_AVAILABLE:
+            try:
+                open_img = Image.open(resource_path("assets/eye_open.png")).resize((24, 24), Image.Resampling.LANCZOS)
+                closed_img = Image.open(resource_path("assets/eye_closed.png")).resize((24, 24), Image.Resampling.LANCZOS)
+                
+                self.open_icon = ImageTk.PhotoImage(self._tint_image(open_img, "#ffffff"))
+                self.closed_icon = ImageTk.PhotoImage(self._tint_image(closed_img, "#ffffff"))
+                self.has_icons = True
+            except Exception as e:
+                logging.warning(f"Could not load eye icons: {e}")
+        
+        # Use a Label for robust image display
+        if self.has_icons:
+            self.widget = tk.Label(
+                self,
+                image=self.open_icon,
+                borderwidth=0,
+                background="#302a40",
+                cursor="hand2"
+            )
+            # Bind events to the Label
+            self.widget.bind("<Button-1>", lambda e: self._on_click())
+            self.widget.bind("<Enter>", self._on_hover)
+            self.widget.bind("<Leave>", self._on_leave)
+        else:
+            # Fallback to a standard text Button if icons fail
+            self.widget = tk.Button(
+                self,
+                text="👁",
+                command=self._on_click,
+                borderwidth=0, relief="flat", background="#302a40",
+                activebackground="#9966cc", foreground="#ffffff",
+                activeforeground="#ffffff", font=("Segoe UI", 14),
+                highlightthickness=0, cursor="hand2"
+            )
+        
+        self.widget.pack(padx=4, pady=4)
+
+    def _tint_image(self, image, color):
+        """Tints a black-on-transparent image to the specified color."""
+        if image.mode != 'RGBA': image = image.convert('RGBA')
+        # Create a solid color layer
+        color_layer = Image.new('RGBA', image.size, color)
+        # Use the original image's alpha channel as a mask
+        alpha_mask = image.split()[-1]
+        # Composite the color layer onto a transparent background using the alpha mask
+        tinted_image = Image.new('RGBA', image.size)
+        tinted_image.paste(color_layer, (0,0), mask=alpha_mask)
+        return tinted_image
+
+    def _on_click(self):
+        """Handles the click event, toggles state, and calls the command."""
+        self.visible = not self.visible
+        self._update_icon()
+        if self.command:
+            self.command()
+
+    def _on_hover(self, event):
+        """Changes background on hover for visual feedback."""
+        if self.has_icons:
+            self.widget.config(background="#9966cc")
+
+    def _on_leave(self, event):
+        """Resets background when the mouse leaves."""
+        if self.has_icons:
+            self.widget.config(background="#302a40")
+
+    def set_visible(self, visible):
+        """Allows external control over the button's state."""
+        self.visible = visible
+        self._update_icon()
+
+    def _update_icon(self):
+        """Switches the displayed icon based on the current state."""
+        if self.has_icons:
+            image = self.closed_icon if self.visible else self.open_icon
+            self.widget.config(image=image)
+        else:
+            # Fallback text update
+            text = "🙈" if self.visible else "👁"
+            self.widget.config(text=text)
+
 class LoginFrame(ttk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
@@ -457,23 +560,11 @@ class LoginFrame(ttk.Frame):
         
         self.password_visible = tk.BooleanVar(value=False)
         
-        # Updated eye button styling for rounded theme
-        self.eye_button = tk.Button(
-            password_frame,
-            text="👁",
-            command=self._toggle_password_visibility,
-            borderwidth=0,
-            relief="flat",
-            background="#302a40", # WIDGET_BG
-            activebackground="#9966cc", # ACCENT
-            foreground="#dcd4e8", # FG
-            activeforeground="#ffffff",
-            font=("Segoe UI", 12),
-            highlightthickness=0  # Remove focus border
-        )
+        # Custom eye button with icons
+        self.eye_button = CustomEyeButton(password_frame, self._toggle_password_visibility)
         self.eye_button.pack(side=tk.LEFT, padx=(5, 0))
         
-        # Custom checkboxes
+        # Custom checkboxes (keeping the previous CustomCheckbox implementation)
         self.remember_var = tk.BooleanVar(value=self.controller.config_manager.config["authentication"]["remember_session"])
         self.remember_checkbox = CustomCheckbox(frame, "Remember session", self.remember_var)
         self.remember_checkbox.pack(anchor=tk.W, pady=(10, 5))
@@ -496,12 +587,12 @@ class LoginFrame(ttk.Frame):
     def _toggle_password_visibility(self):
         if self.password_visible.get():
             self.password_entry.config(show="*")
-            self.eye_button.config(text="👁")
             self.password_visible.set(False)
         else:
             self.password_entry.config(show="")
-            self.eye_button.config(text="👁\u0336")
             self.password_visible.set(True)
+        
+        self.eye_button.set_visible(self.password_visible.get())
 
     def load_saved_credentials(self):
         auth_config = self.controller.config_manager.config["authentication"]
@@ -518,11 +609,11 @@ class LoginFrame(ttk.Frame):
         )
 
 class AddComputerFrame(ttk.Frame):
-    # This class is unchanged but included for completeness.
     def __init__(self, parent, controller):
         super().__init__(parent, padding=10)
         self.controller = controller
         self.username = controller.username
+        self.last_added_computer_id = None  # Track the last added computer
         
         self.setup_ui()
         self.load_defaults()
@@ -533,6 +624,15 @@ class AddComputerFrame(ttk.Frame):
         toolbar_frame = ttk.Frame(self)
         toolbar_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(toolbar_frame, text="🔄 Gather System Info", command=self.gather_system_info).pack(side=tk.LEFT)
+        
+        # Make the button work exactly like other buttons - no special styling or state management
+        self.open_glpi_button = ttk.Button(
+            toolbar_frame, 
+            text="🌐 Open in GLPI", 
+            command=self.open_computer_in_glpi
+        )
+        self.open_glpi_button.pack(side=tk.LEFT, padx=(10, 0))
+        
         self.status_label = ttk.Label(self, text="Ready", foreground="green")
         self.status_label.pack(in_=toolbar_frame, side=tk.RIGHT)
 
@@ -611,17 +711,52 @@ class AddComputerFrame(ttk.Frame):
         try:
             computer_id = glpi.add("Computer", data)
             if computer_id:
-                messagebox.showinfo("Success", f"Computer added with ID: {computer_id}", parent=self)
+                # Properly save the computer ID
+                self.last_added_computer_id = computer_id
+                logging.info(f"Computer added successfully with ID: {computer_id}")
+                
+                messagebox.showinfo("Success", f"Computer added with ID: {computer_id}\n\nYou can now click 'Open in GLPI' to view it in your browser.", parent=self)
                 self.clear_form()
             else:
                 messagebox.showerror("Error", "Failed to add computer. Check logs.", parent=self)
         except Exception as e:
+            logging.error(f"Error adding computer: {e}")
             messagebox.showerror("Error", f"Error adding computer: {str(e)}", parent=self)
+
+    def open_computer_in_glpi(self):
+        """Open the computer page in GLPI using the default web browser."""
+        if not self.last_added_computer_id:
+            messagebox.showwarning(
+                "No Computer Available", 
+                "No computer ID available.\n\nPlease add a computer first, then you can open it in GLPI.", 
+                parent=self
+            )
+            return
+        
+        try:
+            # Extract base URL from the API URL
+            base_url = glpi.api_url.replace("/apirest.php", "")
+            computer_url = f"{base_url}/front/computer.form.php?id={self.last_added_computer_id}"
+            
+            logging.info(f"Opening computer {self.last_added_computer_id} in browser: {computer_url}")
+            
+            # Open URL in default browser
+            import webbrowser
+            webbrowser.open(computer_url)
+            
+            self.status_label.config(text=f"Opened computer {self.last_added_computer_id} in browser", foreground="green")
+            
+        except Exception as e:
+            logging.error(f"Failed to open computer in GLPI: {e}")
+            messagebox.showerror("Error", f"Failed to open computer in GLPI:\n{str(e)}", parent=self)
 
     def clear_form(self):
         for var in self.basic_vars.values(): var.set("")
         for var in self.hardware_vars.values(): var.set("")
         self.load_defaults()
+        # Note: We intentionally DON'T reset the computer ID here so users can still open the last added computer
+        # If you want to reset it, uncomment the next line:
+        # self.last_added_computer_id = None
 
 class SearchFrame(ttk.Frame):
     # This class is unchanged but included for completeness.

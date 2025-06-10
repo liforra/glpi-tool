@@ -16,6 +16,7 @@ A modern, feature-rich desktop application for interacting with GLPI (IT Asset M
   - Support for hardware details (CPU, GPU, RAM, Storage)
   - Manufacturer and model detection
   - Serial number and location tracking
+  - Direct browser integration - Open newly added computers in GLPI web interface
 
 - **Search Functionality**
   - Search computers by serial number
@@ -33,8 +34,9 @@ A modern, feature-rich desktop application for interacting with GLPI (IT Asset M
   - Purple dark theme (default)
   - Fluent design theme (requires sv-ttk)
   - Responsive layout with tabs
-  - Password visibility toggle
+  - Password visibility toggle with custom icons
   - Status indicators and progress feedback
+  - Custom checkboxes and rounded design elements
 
 - **Configuration Management**
   - TOML-based configuration
@@ -49,6 +51,7 @@ A modern, feature-rich desktop application for interacting with GLPI (IT Asset M
 tkinter (usually included with Python)
 toml
 requests
+Pillow (for custom icons)
 psutil (optional, for enhanced system info)
 ```
 
@@ -85,7 +88,12 @@ cd glpi-tui
 pip install -r requirements.txt
 ```
 
-3. **Install optional dependencies:**
+3. **Install required dependencies for icons:**
+```bash
+pip install Pillow  # Required for eye icons
+```
+
+4. **Install optional dependencies:**
 ```bash
 # For enhanced theming
 pip install sv-ttk
@@ -97,7 +105,7 @@ pip install wmi pywin32
 pip install psutil
 ```
 
-4. **Configure the application:**
+5. **Configure the application:**
    - Update the `app_token` in `glpi_config.toml`
    - Modify other settings as needed
 
@@ -137,6 +145,7 @@ password = ""
 theme = "purple"  # or "fluent"
 auto_fill_defaults = true
 auto_gather_system_info = true
+purple_theme_rounded = true  # Enable rounded elements in purple theme
 ```
 
 ### Logging
@@ -163,6 +172,7 @@ python main.py
    - Click "Gather System Info" to auto-populate fields
    - Fill in additional details as needed
    - Click "Add Computer" to submit
+   - Click "Open in GLPI" to view the computer in your web browser
 
 4. **Search:**
    - Navigate to the "Search" tab
@@ -182,14 +192,14 @@ pip install pyinstaller
 
 2. **Build the executable:**
 ```bash
-# Basic one-file executable
-pyinstaller --onefile --windowed --name "GLPI-GUI-Client" main.py
-
-# Include configuration file
-pyinstaller --onefile --windowed --add-data "glpi_config.toml;." --name "GLPI-GUI-Client" main.py
+# Basic one-file executable with assets
+pyinstaller --onefile --windowed --add-data "glpi_config.toml;." --add-data "assets;assets" --name "GLPI-GUI-Client" main.py
 
 # With icon (if you have one)
-pyinstaller --onefile --windowed --icon=icon.ico --add-data "glpi_config.toml;." --name "GLPI-GUI-Client" main.py
+pyinstaller --onefile --windowed --icon=icon.ico --add-data "glpi_config.toml;." --add-data "assets;assets" --name "GLPI-GUI-Client" main.py
+
+# For better compatibility, include hidden imports
+pyinstaller --onefile --windowed --add-data "glpi_config.toml;." --add-data "assets;assets" --hidden-import=PIL --hidden-import=PIL.Image --hidden-import=PIL.ImageTk --name "GLPI-GUI-Client" main.py
 ```
 
 ### Alternative Build Methods
@@ -197,14 +207,26 @@ pyinstaller --onefile --windowed --icon=icon.ico --add-data "glpi_config.toml;."
 #### Nuitka (High Performance)
 ```bash
 pip install nuitka
-python -m nuitka --onefile --windows-disable-console --enable-plugin=tk-inter main.py
+python -m nuitka --onefile --windows-disable-console --enable-plugin=tk-inter --include-data-dir=assets=assets --include-data-files=glpi_config.toml=glpi_config.toml main.py
 ```
 
 #### Cython (Compilation)
 ```bash
 pip install cython
-# Requires additional setup.py configuration
+# Requires additional setup.py configuration and manual asset copying
 ```
+
+## Assets and Attribution
+
+This project uses icons from [Flaticon](https://www.flaticon.com/):
+
+- **Eye icons** (eye_open.png, eye_closed.png) created by [Freepik](https://www.freepik.com) from [Flaticon](https://www.flaticon.com/)
+
+### License Compatibility
+- The eye icons are used under Flaticon's free license with attribution
+- This is compatible with the project's GNU AGPL v3.0 license
+- Icons are included in the `assets/` folder and bundled with the executable
+
 
 ## Troubleshooting
 
@@ -226,11 +248,17 @@ pip install cython
    - Install `sv-ttk` for fluent theme support
    - Fall back to "purple" theme if fluent is unavailable
 
+5. **Missing Eye Icons**
+   - Ensure `assets/eye_open.png` and `assets/eye_closed.png` exist
+   - Install Pillow: `pip install Pillow`
+   - Application will fall back to text icons if images are unavailable
+
 ### Build Issues
 
 1. **Missing Dependencies in Executable**
    - Use `--hidden-import` flags in PyInstaller
    - Include data files with `--add-data`
+   - Ensure assets folder is included: `--add-data "assets;assets"`
 
 2. **Large Executable Size**
    - Use `--onedir` instead of `--onefile` for faster startup
