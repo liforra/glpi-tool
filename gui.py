@@ -120,6 +120,7 @@ class ConfigManager:
         except: 
             return False
 
+# ThemeManager, CustomCheckbox, and CustomEyeButton classes remain unchanged
 class ThemeManager:
     @staticmethod
     def apply(root, config):
@@ -675,6 +676,11 @@ class AddComputerFrame(ttk.Frame):
             messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
             return
         
+        # Check if we have a valid session before proceeding
+        if not hasattr(glpi, 'session_token') or not glpi.session_token:
+            messagebox.showerror("Session Error", "No valid session. Please logout and login again.", parent=self)
+            return
+        
         data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
         data["tech_user"] = self.username
         
@@ -762,6 +768,11 @@ class SearchFrame(ttk.Frame):
 
     def _search_thread(self, query):
         try:
+            # Check session before searching
+            if not hasattr(glpi, 'session_token') or not glpi.session_token:
+                self.after(0, self._update_results, "Session expired. Please logout and login again.")
+                return
+                
             result_str = glpi.search("serial", query)
             try:
                 result_json = json.loads(result_str)
