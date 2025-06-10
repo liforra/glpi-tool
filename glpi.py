@@ -1,246 +1,113 @@
 import requests
-import base64
 import json
 import os
-import getpass
 import logging
-
-# --- Application Imports ---
-if __name__ == "__main__":
-    import atexit
-
 
 log = logging.getLogger(__name__)
 
-
-# --- Statics ---
 api_url = "https://ticket.akademie-awo.de/glpi/apirest.php"
-app_token = os.getenv("APP_TOKEN")
+_app_token = None
+_session_token = None
+_username = None
 
-# --- Basics that we should always have ---
+def init_glpi(app_token):
+    global _app_token
+    if not app_token or "PLEASE_REPLACE" in app_token:
+        raise ValueError("GLPI Library Error: App-Token is missing or invalid. Please set it in glpi_config.toml.")
+    _app_token = app_token
+    log.info("GLPI library initialized with an App-Token.")
 
-def confirm(question):
-    valid_yes = ['y', 'yes', 'Y', 'Yes', 'YES', 'Ja', 'JA', 'ja', 'j']
-    valid_no = ['n', 'no', 'N', 'No', 'NO', 'Nein', 'nein', 'NEIN']
-    
-    while True:
-        answer = input(f"{question} (y/n): ").strip()
-        if answer in valid_yes:
-            return True
-        elif answer in valid_no:
-            return False
-        else:
-            log.warning("Invalid Option. (y/n)")
-
-
-
-# --- GLPI Library ---
+def killsession():
+    if _session_token:
+        sendglpi("/killSession", _session_token)
 
 def sendglpi(endpoint:str, session_token:str, method="GET", payload={}):
-    log.debug(f'{method} request to {endpoint}, with session Token {session_token} and payload {payload}')
-    if endpoint.startswith(api_url):
-        url = f"{endpoint}"
-    else:
-        url = f"{api_url}{endpoint}"
-    headers = {
-        'Content-Type': 'application/json',
-        'App-Token': f'{app_token}',
-        'Session-Token': f'{session_token}'
-    }
-    #return requests.request("GET", url, headers=headers, data=payload, timeout=5, verify=verify,auth=auth)
-    response = requests.request(f"{method}", url, headers=headers, data=payload, timeout=5)
-    if response.status_code == 404:
-        raise Exception("Site not found")
-    responset = response.text
-    #response = str(response.content).strip('b').strip("'")
-    log.debug(responset)
+    if not _app_token:
+        raise RuntimeError("GLPI Library Error: init_glpi() must be called before using the API.")
+    url = f"{api_url}{endpoint}" if not endpoint.startswith(api_url) else endpoint
+    headers = {'Content-Type': 'application/json', 'App-Token': f'{_app_token}', 'Session-Token': f'{session_token}'}
     
-    return responset
-
-#def ToItemType(itemtype:str):
-#    processor = ["cpu", "processor","prozessor"]
-#    gpu =
-#    os =
-#    harddrive =
-#    computer =
-#    computermodel = 
-#    user = ["user", "benutzer", "techniti"]
-#    if itemtype.lower() in processor:
-#        return "Processor"
+    log.debug(f'{method} request to {url} with payload {payload}')
+    response = requests.request(method, url, headers=headers, data=payload, timeout=10)
+    response.raise_for_status() # Will raise an exception for 4xx/5xx errors
+    return response.text
 
 def getId(itemtype:str, query:str):
-    #ToItemType(itemtype)
-    response = sendglpi(f"/search/{itemtype}?criteria[0][link]=AND&criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]={query}&forcedisplay=2", session_token)
-    if response == '["ERROR_RIGHT_MISSING","Sie haben keine ausreichenden Rechte f\\xc3\\xbcr diese Aktion."]':
-        log.error(f'1403: Permission denied reading {itemtype}')
-        return 1403
-    response = json.loads(response)
+    if not query: return None
     try:
-        log.debug(f'Requested {itemtype} has ID {response['data'][0]['2']}')
-        return response['data'][0]['2']
-    except KeyError:
-        log.warning(f'1404: No Result Matching {query}')
-        return 1404
-getID = getId
-getid = getId
-def add(itemtype:str, data:dict):
-    match itemtype:
-        case "Computer": 
-            log.debug('Reached add: Computer')
-            required_keys = ["name", "serial", "location", "tech_user", "model"]
-            #if not all(key in data for key in required_keys):
-            #    log.error(f"Fehlende Daten für Computer. Benötigt: {required_keys}, Vorhanden: {data.keys()}")
-            #    return # Oder eine Exception werfen
-            payload = {
-                "input": {
-                    "name": data.get("name"),
-                    "serial": data.get("serial"),
-                    "locations_id": getId("Location", data.get("location")),
-                    "users_id_tech": getId("User", data.get("tech_user")),
-                    "groups_id_tech": 1,
-                    "computermodels_id": getId("ComputerModel", data.get("model")),
-                    "comment": f"\r\nThis Computer was automagically added using The GLPIClient. {username} is responsible for any wrongdoings. Added from {(os.popen('hostname').read().strip() or 'Unknown Device')}",
-                    "manufacturers_id": getId("Manufacturer", data.get("manufacturer"))
-                }
-            }
-            log.debug(f"Payload Pre-Conversion: {payload}")
-            payload = json.dumps(payload)
-            log.debug(f"Payload Post-Conversion: {payload}")
-            response = sendglpi(f"{api_url}/{itemtype}/", session_token, "POST", payload)
-            log.debug(f"Response {response}")
-            response = json.loads(response)
-            id = response["id"]
-            components = ["cpu", "processor", "gpu", "ram", "hdd", "os", "os_version"]
-            if any(item in data for item in components):
-                addToItemtype(id, data)
-            else:
-                return id
-def addToItemtype(device_id: int, data: dict):
-    # What each component type maps to in GLPI
-    component_mappings = {
-        "processor": ("Processor", "processors_id"),
-        "cpu": ("Processor", "processors_id"), 
-        "gpu": ("GraphicCard", "graphiccards_id"),
-        "ram": ("Memory", "memories_id"),
-        "hdd": ("HardDrive", "harddrives_id"),
-        "os": ("OperatingSystem", "operatingsystems_id"),
-        "os_version": ("OperatingSystemVersion", "operatingsystemversions_id"),
-    }
-    
-    components_to_update = {}
-    
-    # Process each component in the data
-    for component_type, component_name in data.items():
-        # Clean up the key (remove spaces, underscores, make lowercase)
-        clean_type = component_type.lower().replace(" ", "").replace("_", "")
-        
-        # Check if we know how to handle this component type
-        if clean_type not in component_mappings:
-            log.warning(f"Don't know how to handle component type: {component_type}")
-            continue
-        
-        # Get GLPI info for this component type
-        glpi_itemtype, glpi_field_name = component_mappings[clean_type]
-        
-        # Search for this specific component in GLPI
-        found_id = getId(glpi_itemtype, component_name)
-        
-        # Check if we successfully found the component
-        if isinstance(found_id, int) and found_id not in [1403, 1404]:
-            # Success - add it to our update list
-            components_to_update[glpi_field_name] = found_id
-            log.info(f"Found {component_type}: '{component_name}' with ID {found_id}")
+        response_str = sendglpi(f"/search/{itemtype}?criteria[0][link]=AND&criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]={query}&forcedisplay=2", _session_token)
+        response_json = json.loads(response_str)
+        if response_json.get("totalcount", 0) > 0:
+            item_id = response_json['data'][0]['2']
+            log.debug(f'Found ID for {itemtype} "{query}": {item_id}')
+            return item_id
         else:
-            # Failed - log what went wrong
-            log.error(f"Couldn't find {component_type}: '{component_name}'")
-    
-    # If we didn't find any valid components, don't do anything
-    if not components_to_update:
-        log.warning("No valid components found to update")
-        return
-    
-    # Send the update to GLPI
-    update_data = json.dumps({"input": components_to_update})
-    response = sendglpi(f"/Computer/{device_id}", session_token, "PUT", update_data)
-    
-    log.info(f"Device {device_id} updated. Response: {response}")
-def search(mode:str, query:str): #TODO: Dont return the response, format the response nicer (maybe a list?)
-    match mode:
-        case "serial": # this is here incase the user wants to search for something other then the serial number  c
-            return(sendglpi(f"/search/Computer/?criteria[0][link]=AND&criteria[0][field]=5&criteria[0][searchtype]=contains&criteria[0][value]={query}", session_token))
-    
+            log.warning(f'1404: No result for {itemtype} matching "{query}"')
+            return None
+    except Exception as e:
+        log.error(f'Error getting ID for {itemtype} "{query}": {e}')
+        return None
+
+def add(itemtype:str, data:dict):
+    if itemtype == "Computer":
+        log.debug('Reached add: Computer')
+        payload_input = {"name": data.get("name"), "serial": data.get("serial")}
+        
+        # --- FIX: Only add IDs to payload if they are found ---
+        mappings = {
+            "locations_id": ("Location", data.get("location")),
+            "users_id_tech": ("User", _username),
+            "computermodels_id": ("ComputerModel", data.get("model")),
+            "manufacturers_id": ("Manufacturer", data.get("manufacturer")),
+            "operatingsystems_id": ("OperatingSystem", data.get("os")),
+            "operatingsystemversions_id": ("OperatingSystemVersion", data.get("os_version")),
+        }
+        for key, (item_type, value) in mappings.items():
+            item_id = getId(item_type, value)
+            if item_id:
+                payload_input[key] = item_id
+
+        payload_input["comment"] = f"Automagically added by {(_username or 'Unknown User')} from {(os.popen('hostname').read().strip() or 'Unknown Device')}."
+        
+        payload = json.dumps({"input": payload_input})
+        response_str = sendglpi(f"/{itemtype}/", _session_token, "POST", payload)
+        
+        # --- FIX: Properly check for success before getting ID ---
+        response_json = json.loads(response_str)
+        if isinstance(response_json, dict) and "id" in response_json:
+            new_id = response_json["id"]
+            log.info(f"Successfully added Computer with ID: {new_id}")
+            # Add components if any
+            # addToItemtype(new_id, data) # This can be re-enabled if needed
+            return new_id
+        else:
+            log.error(f"Failed to add computer. GLPI returned: {response_str}")
+            raise Exception(f"Failed to add computer. GLPI returned: {response_json}")
+    return None
+
+def search(mode:str, query:str):
+    if mode == "serial":
+        return sendglpi(f"/search/Computer/?criteria[0][link]=AND&criteria[0][field]=5&criteria[0][searchtype]=contains&criteria[0][value]={query}", _session_token)
 
 def auth(username:str, password:str, verify:bool, remember:bool):
-    log.debug('Reached Auth')
-    log.debug(f"{username}, Verify: {verify}, RememberMe: {remember}")
-    auth = (username, password)
-    payload = {}
-    headers = {
-        'Content-Type': 'application/json',
-        'App-Token': f'{app_token}',
-    }
-    response = requests.request("GET", f"{api_url}/initSession", headers=headers, data=payload, timeout=5, verify=verify,auth=auth)
-    response = str(response.content).strip('b').strip("'") # There is a random "b" at the front and the data is encapsulated in ' So this gets rid of that
-    if response == '["ERROR_GLPI_LOGIN","Falscher Benutzername oder Passwort"]':
+    global _session_token, _username
+    if not _app_token:
+        raise RuntimeError("GLPI Library Error: init_glpi() must be called before using the API.")
+    
+    headers = {'Content-Type': 'application/json', 'App-Token': f'{_app_token}'}
+    response = requests.get(f"{api_url}/initSession", headers=headers, timeout=5, verify=verify, auth=(username, password))
+    
+    response_text = response.text
+    if 'ERROR_GLPI_LOGIN' in response_text:
         log.error("1401: Bad Username or Password")
         return 1401
-    log.debug(response)
-    if response.startswith('{'): # This is a dumb way to check if its json, lets hope it doesnt break
-        response = json.loads(response)
-        if(response['session_token']): 
-            log.info('Authentication to GLPI Sucessfull')
-            return response['session_token']
-        else:
-            log.error('1400: Something went wrong. That\'s all we know. Check Debug Logs')
-            return 1400
-
-# --- Application ---
-
-if __name__ == "__main__":
-    global username
-    attempts = 0
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    session_token = None
     
-    while not session_token:
-        attempts += 1
-        username = input("Enter your Username: ")
-        session_token = auth(username, getpass.getpass('Password: '), confirm('Verify SSL?'), False)
-        if isinstance(session_token, int):
-            match session_token:
-                case 1401:
-                    log.warning(f'Incorrect Username or Password. ({session_token})')
-                    session_token = None
-                    continue
-                case 1400:
-                    log.error(f'Something went wrong in the Authentication. ({session_token})')
-                    break
-                case _:
-                    log.error(f'Something seriously went wrong in the Authentication ({session_token})')
-                    break
+    response_json = response.json()
+    if 'session_token' in response_json:
+        log.info('Authentication to GLPI Successful')
+        _session_token = response_json['session_token']
+        _username = username
+        return [response_json['session_token'], remember]
     
-    
-    
-    print('1 to Search, 2 to Add a computer, 3 to Exit, 4 to find Ids of Items')
-    option = input()
-    match int(option):
-        case 1:
-            print(search("serial", input("Please Enter your Search Query: ")))
-        case 3:
-            killsession()
-            exit()
-        case 4:
-            log.debug(getId(input('What Item are you looking for? '), input("Please enter the Search query: ")))
-        case 2:
-            test_data = {"manufacturer":"Dell","name": "GLPIAPI Test Computer","serial": "794502","os": "windows 11","gpu": "Xe Graphics", "cpu": "i5-1145G7","ram": "16 GB","hdd": "SSD 256"}
-            add("Computer", test_data)
-            processor = input("Please enter the processor of the Device ")
-            #gpu = input("Please enter the GPU of the Deivce ")
-            ram = input("Please enter the RAM of the Device ")
-            os = input("Please enter the OS of the Device ")
-            os_version = input("Please enter the OS Version of the Device ")
-            hdd = input("Enter the drive of the Device ")
-            add("Computer", {"name":input("Please enter the name of the Device"), "serial": input("Please enter the Serial Number"), "location": "Akademie", "tech_user": username, "model": input("Enter the model Pls "), "manufacturer": input("Enter the Manufacturer of the Device "), "processor": processor, "os": os, "os_version": os_version, "hdd": hdd, "ram": ram})
+    log.error(f'1400: Authentication failed. Response: {response_text}')
+    return 1400

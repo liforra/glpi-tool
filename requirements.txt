@@ -1,0 +1,5 @@
+toml>=0.10.2
+requests>=2.25.1
+psutil>=5.8.0
+wmi>=1.5.1; sys_platform == "win32"
+sv-ttk>=2.5.5
