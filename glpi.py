@@ -18,24 +18,60 @@ def init_glpi(app_token):
     log.info("GLPI library initialized with an App-Token.")
 
 def killsession():
+    global _session_token
     if _session_token:
         sendglpi("/killSession", _session_token)
 
-def sendglpi(endpoint:str, session_token:str, method="GET", payload={}):
+def sendglpi(endpoint, session_token=None, method="GET", payload={}):
+    global _session_token, _username
     if not _app_token:
         raise RuntimeError("GLPI Library Error: init_glpi() must be called before using the API.")
+    
+    if session_token is None:
+        session_token = _session_token
+    
+    if not session_token:
+        raise RuntimeError("GLPI Library Error: No session token available. Please authenticate first.")
+    
     url = f"{api_url}{endpoint}" if not endpoint.startswith(api_url) else endpoint
     headers = {'Content-Type': 'application/json', 'App-Token': f'{_app_token}', 'Session-Token': f'{session_token}'}
     
     log.debug(f'{method} request to {url} with payload {payload}')
     response = requests.request(method, url, headers=headers, data=payload, timeout=10)
-    response.raise_for_status() # Will raise an exception for 4xx/5xx errors
+    
+    if response.status_code == 401:
+        _session_token = None
+        _username = None
+        log.warning("Session token expired or invalid - cleared session")
+    
+    response.raise_for_status()
     return response.text
 
-def getId(itemtype:str, query:str):
-    if not query: return None
+def restore_session(session_token, username):
+    global _session_token, _username
+    if not _app_token:
+        raise RuntimeError("GLPI Library Error: init_glpi() must be called before using the API.")
+    
     try:
-        response_str = sendglpi(f"/search/{itemtype}?criteria[0][link]=AND&criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]={query}&forcedisplay=2", _session_token)
+        headers = {'Content-Type': 'application/json', 'App-Token': f'{_app_token}', 'Session-Token': f'{session_token}'}
+        response = requests.get(f"{api_url}/getMyProfiles", headers=headers, timeout=5)
+        if response.status_code == 200:
+            _session_token = session_token
+            _username = username
+            log.info(f"Session restored for user: {username}")
+            return True
+        else:
+            log.warning("Saved session token is invalid")
+            return False
+    except Exception as e:
+        log.error(f"Failed to restore session: {e}")
+        return False
+
+def getId(itemtype, query):
+    if not query: 
+        return None
+    try:
+        response_str = sendglpi(f"/search/{itemtype}?criteria[0][link]=AND&criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]={query}&forcedisplay=2")
         response_json = json.loads(response_str)
         if response_json.get("totalcount", 0) > 0:
             item_id = response_json['data'][0]['2']
@@ -48,12 +84,11 @@ def getId(itemtype:str, query:str):
         log.error(f'Error getting ID for {itemtype} "{query}": {e}')
         return None
 
-def add(itemtype:str, data:dict):
+def add(itemtype, data):
     if itemtype == "Computer":
         log.debug('Reached add: Computer')
         payload_input = {"name": data.get("name"), "serial": data.get("serial")}
         
-        # --- FIX: Only add IDs to payload if they are found ---
         mappings = {
             "locations_id": ("Location", data.get("location")),
             "users_id_tech": ("User", _username),
@@ -70,26 +105,23 @@ def add(itemtype:str, data:dict):
         payload_input["comment"] = f"Automagically added by {(_username or 'Unknown User')} from {(os.popen('hostname').read().strip() or 'Unknown Device')}."
         
         payload = json.dumps({"input": payload_input})
-        response_str = sendglpi(f"/{itemtype}/", _session_token, "POST", payload)
+        response_str = sendglpi(f"/{itemtype}/", None, "POST", payload)
         
-        # --- FIX: Properly check for success before getting ID ---
         response_json = json.loads(response_str)
         if isinstance(response_json, dict) and "id" in response_json:
             new_id = response_json["id"]
             log.info(f"Successfully added Computer with ID: {new_id}")
-            # Add components if any
-            # addToItemtype(new_id, data) # This can be re-enabled if needed
             return new_id
         else:
             log.error(f"Failed to add computer. GLPI returned: {response_str}")
             raise Exception(f"Failed to add computer. GLPI returned: {response_json}")
     return None
 
-def search(mode:str, query:str):
+def search(mode, query):
     if mode == "serial":
-        return sendglpi(f"/search/Computer/?criteria[0][link]=AND&criteria[0][field]=5&criteria[0][searchtype]=contains&criteria[0][value]={query}", _session_token)
+        return sendglpi(f"/search/Computer/?criteria[0][link]=AND&criteria[0][field]=5&criteria[0][searchtype]=contains&criteria[0][value]={query}")
 
-def auth(username:str, password:str, verify:bool, remember:bool):
+def auth(username, password, verify, remember):
     global _session_token, _username
     if not _app_token:
         raise RuntimeError("GLPI Library Error: init_glpi() must be called before using the API.")

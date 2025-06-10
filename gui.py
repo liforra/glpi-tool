@@ -41,7 +41,6 @@ except ImportError:
     logging.warning("sv-ttk library not found. 'fluent' theme will not be available.")
 
 class ConfigManager:
-    # This class is unchanged but included for completeness.
     def __init__(self, config_path=resource_path("glpi_config.toml")):
         self.config_path = Path(config_path)
         self.config = self.load_config()
@@ -78,7 +77,7 @@ class ConfigManager:
                 "theme": "purple",
                 "auto_fill_defaults": True,
                 "auto_gather_system_info": True,
-                "purple_theme_rounded": True,  # New config option
+                "purple_theme_rounded": True,
             },
             "fluent_theme_colors": {
                 "mode": "dark", "primary": "#8a2be2", "background": "#201a2b",
@@ -89,16 +88,20 @@ class ConfigManager:
         }
 
     def save_config(self, config=None):
-        if config is None: config = self.config
+        if config is None: 
+            config = self.config
         try:
-            with open(self.config_path, "w") as f: toml.dump(config, f)
-        except Exception as e: logging.error(f"Error saving config: {e}")
+            with open(self.config_path, "w") as f: 
+                toml.dump(config, f)
+        except Exception as e: 
+            logging.error(f"Error saving config: {e}")
 
     def _update_dict(self, base, update):
         for k, v in update.items():
             if isinstance(v, dict) and k in base and isinstance(base[k], dict):
                 self._update_dict(base[k], v)
-            else: base[k] = v
+            else: 
+                base[k] = v
 
     def update_session(self, token, username):
         expires = datetime.now() + timedelta(hours=self.config["authentication"]["session_timeout_hours"])
@@ -110,10 +113,12 @@ class ConfigManager:
         self.save_config()
 
     def is_session_valid(self):
-        if not self.config.get("session", {}).get("token"): return False
+        if not self.config.get("session", {}).get("token"): 
+            return False
         try:
             return datetime.now() < datetime.fromisoformat(self.config["session"]["expires"])
-        except: return False
+        except: 
+            return False
 
 class ThemeManager:
     @staticmethod
@@ -139,6 +144,7 @@ class ThemeManager:
         style.configure("TLabelframe.Label", background=bg, foreground=fg)
         style.map("TNotebook.Tab", background=[("selected", primary)])
         root.configure(background=bg)
+
     @staticmethod
     def apply_purple_theme(root, config):
         style = ttk.Style()
@@ -150,15 +156,12 @@ class ThemeManager:
         DARK_BORDER = "#1a1525"
         WIDGET_BORDER = "#403750"
         
-        # Check if rounded theme is enabled
         rounded = config.get("ui", {}).get("purple_theme_rounded", True)
 
         root.configure(background=BG)
         
-        # Use 'alt' theme as base and completely override it
         style.theme_use('alt')
         
-        # Configure all possible style elements to prevent white borders
         style.configure(".", 
             background=BG, 
             foreground=FG, 
@@ -172,20 +175,17 @@ class ThemeManager:
             font=("Segoe UI", 10)
         )
         
-        # Frame styling
         style.configure("TFrame", 
             background=BG,
             borderwidth=0,
             relief="flat"
         )
         
-        # Label styling
         style.configure("TLabel", 
             background=BG, 
             foreground=FG
         )
         
-        # Button styling - completely custom
         style.configure("TButton",
             background=WIDGET_BG,
             foreground=FG,
@@ -221,7 +221,6 @@ class ThemeManager:
             ]
         )
         
-        # Entry styling - aggressive override
         style.configure("TEntry",
             fieldbackground=WIDGET_BG,
             background=WIDGET_BG,
@@ -255,9 +254,6 @@ class ThemeManager:
             ]
         )
         
-        
-        # Checkbutton styling
-# Checkbutton styling - more aggressive fix
         style.configure("TCheckbutton",
             background=BG,
             foreground=FG,
@@ -301,7 +297,6 @@ class ThemeManager:
             ]
         )
         
-        # Notebook styling
         style.configure("TNotebook",
             background=BG,
             borderwidth=0,
@@ -326,7 +321,6 @@ class ThemeManager:
             ]
         )
         
-        # LabelFrame styling
         style.configure("TLabelframe",
             background=BG,
             borderwidth=0 if rounded else 1,
@@ -342,7 +336,6 @@ class ThemeManager:
             font=("Segoe UI", 11, "bold")
         )
         
-        # Additional aggressive overrides for any remaining white elements
         style.configure("TScrollbar",
             background=WIDGET_BG,
             troughcolor=BG,
@@ -352,7 +345,6 @@ class ThemeManager:
             arrowcolor=FG
         )
         
-        # Override any remaining problematic elements
         for widget_type in ["TCombobox", "TSpinbox", "TScale", "TProgressbar"]:
             try:
                 style.configure(widget_type,
@@ -365,7 +357,7 @@ class ThemeManager:
                     selectbackground=ACCENT
                 )
             except:
-                pass  # Some widgets might not exist or support all options
+                pass
 
 class CustomCheckbox(tk.Frame):
     def __init__(self, parent, text, variable, **kwargs):
@@ -373,7 +365,6 @@ class CustomCheckbox(tk.Frame):
         self.variable = variable
         self.text = text
         
-        # Create the checkbox canvas
         self.checkbox = tk.Canvas(
             self, 
             width=16, 
@@ -384,7 +375,6 @@ class CustomCheckbox(tk.Frame):
         )
         self.checkbox.pack(side=tk.LEFT, padx=(0, 8))
         
-        # Create the label
         self.label = tk.Label(
             self,
             text=text,
@@ -395,15 +385,12 @@ class CustomCheckbox(tk.Frame):
         )
         self.label.pack(side=tk.LEFT)
         
-        # Bind click events
         self.checkbox.bind("<Button-1>", self._toggle)
         self.label.bind("<Button-1>", self._toggle)
         self.bind("<Button-1>", self._toggle)
         
-        # Initial draw
         self._draw_checkbox()
         
-        # Trace variable changes
         self.variable.trace_add("write", lambda *args: self._draw_checkbox())
     
     def _toggle(self, event=None):
@@ -412,12 +399,10 @@ class CustomCheckbox(tk.Frame):
     def _draw_checkbox(self):
         self.checkbox.delete("all")
         
-        # Colors
         bg_color = "#302a40"
         border_color = "#8a2be2" if self.variable.get() else "#4a445c"
         check_color = "#ffffff"
         
-        # Draw the checkbox background
         self.checkbox.create_rectangle(
             1, 1, 15, 15,
             fill=bg_color,
@@ -425,9 +410,7 @@ class CustomCheckbox(tk.Frame):
             width=2
         )
         
-        # Draw checkmark if checked
         if self.variable.get():
-            # Draw a checkmark
             self.checkbox.create_line(
                 4, 8, 7, 11,
                 fill=check_color,
@@ -443,12 +426,10 @@ class CustomCheckbox(tk.Frame):
 
 class CustomEyeButton(tk.Frame):
     def __init__(self, parent, command, **kwargs):
-        # Initialize the parent Frame with the widget background color
         super().__init__(parent, bg="#302a40", **kwargs)
         self.command = command
         self.visible = False
         
-        # Load and store image references to prevent garbage collection
         self.open_icon = None
         self.closed_icon = None
         self.has_icons = False
@@ -464,7 +445,6 @@ class CustomEyeButton(tk.Frame):
             except Exception as e:
                 logging.warning(f"Could not load eye icons: {e}")
         
-        # Use a Label for robust image display
         if self.has_icons:
             self.widget = tk.Label(
                 self,
@@ -473,12 +453,10 @@ class CustomEyeButton(tk.Frame):
                 background="#302a40",
                 cursor="hand2"
             )
-            # Bind events to the Label
             self.widget.bind("<Button-1>", lambda e: self._on_click())
             self.widget.bind("<Enter>", self._on_hover)
             self.widget.bind("<Leave>", self._on_leave)
         else:
-            # Fallback to a standard text Button if icons fail
             self.widget = tk.Button(
                 self,
                 text="👁",
@@ -492,46 +470,37 @@ class CustomEyeButton(tk.Frame):
         self.widget.pack(padx=4, pady=4)
 
     def _tint_image(self, image, color):
-        """Tints a black-on-transparent image to the specified color."""
-        if image.mode != 'RGBA': image = image.convert('RGBA')
-        # Create a solid color layer
+        if image.mode != 'RGBA': 
+            image = image.convert('RGBA')
         color_layer = Image.new('RGBA', image.size, color)
-        # Use the original image's alpha channel as a mask
         alpha_mask = image.split()[-1]
-        # Composite the color layer onto a transparent background using the alpha mask
         tinted_image = Image.new('RGBA', image.size)
         tinted_image.paste(color_layer, (0,0), mask=alpha_mask)
         return tinted_image
 
     def _on_click(self):
-        """Handles the click event, toggles state, and calls the command."""
         self.visible = not self.visible
         self._update_icon()
         if self.command:
             self.command()
 
     def _on_hover(self, event):
-        """Changes background on hover for visual feedback."""
         if self.has_icons:
             self.widget.config(background="#9966cc")
 
     def _on_leave(self, event):
-        """Resets background when the mouse leaves."""
         if self.has_icons:
             self.widget.config(background="#302a40")
 
     def set_visible(self, visible):
-        """Allows external control over the button's state."""
         self.visible = visible
         self._update_icon()
 
     def _update_icon(self):
-        """Switches the displayed icon based on the current state."""
         if self.has_icons:
             image = self.closed_icon if self.visible else self.open_icon
             self.widget.config(image=image)
         else:
-            # Fallback text update
             text = "🙈" if self.visible else "👁"
             self.widget.config(text=text)
 
@@ -560,11 +529,9 @@ class LoginFrame(ttk.Frame):
         
         self.password_visible = tk.BooleanVar(value=False)
         
-        # Custom eye button with icons
         self.eye_button = CustomEyeButton(password_frame, self._toggle_password_visibility)
         self.eye_button.pack(side=tk.LEFT, padx=(5, 0))
         
-        # Custom checkboxes (keeping the previous CustomCheckbox implementation)
         self.remember_var = tk.BooleanVar(value=self.controller.config_manager.config["authentication"]["remember_session"])
         self.remember_checkbox = CustomCheckbox(frame, "Remember session", self.remember_var)
         self.remember_checkbox.pack(anchor=tk.W, pady=(10, 5))
@@ -596,8 +563,10 @@ class LoginFrame(ttk.Frame):
 
     def load_saved_credentials(self):
         auth_config = self.controller.config_manager.config["authentication"]
-        if auth_config.get("username"): self.username_var.set(auth_config["username"])
-        if auth_config.get("password"): self.password_var.set(auth_config["password"])
+        if auth_config.get("username"): 
+            self.username_var.set(auth_config["username"])
+        if auth_config.get("password"): 
+            self.password_var.set(auth_config["password"])
 
     def login(self):
         self.controller.attempt_login(
@@ -613,7 +582,7 @@ class AddComputerFrame(ttk.Frame):
         super().__init__(parent, padding=10)
         self.controller = controller
         self.username = controller.username
-        self.last_added_computer_id = None  # Track the last added computer
+        self.last_added_computer_id = None
         
         self.setup_ui()
         self.load_defaults()
@@ -625,7 +594,6 @@ class AddComputerFrame(ttk.Frame):
         toolbar_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(toolbar_frame, text="🔄 Gather System Info", command=self.gather_system_info).pack(side=tk.LEFT)
         
-        # Make the button work exactly like other buttons - no special styling or state management
         self.open_glpi_button = ttk.Button(
             toolbar_frame, 
             text="🌐 Open in GLPI", 
@@ -706,12 +674,13 @@ class AddComputerFrame(ttk.Frame):
         if not self.basic_vars["serial"].get().strip():
             messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
             return
+        
         data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
         data["tech_user"] = self.username
+        
         try:
             computer_id = glpi.add("Computer", data)
             if computer_id:
-                # Properly save the computer ID
                 self.last_added_computer_id = computer_id
                 logging.info(f"Computer added successfully with ID: {computer_id}")
                 
@@ -721,10 +690,12 @@ class AddComputerFrame(ttk.Frame):
                 messagebox.showerror("Error", "Failed to add computer. Check logs.", parent=self)
         except Exception as e:
             logging.error(f"Error adding computer: {e}")
-            messagebox.showerror("Error", f"Error adding computer: {str(e)}", parent=self)
+            if "401" in str(e) or "Unauthorized" in str(e):
+                messagebox.showerror("Session Expired", "Your session has expired. Please logout and login again.", parent=self)
+            else:
+                messagebox.showerror("Error", f"Error adding computer: {str(e)}", parent=self)
 
     def open_computer_in_glpi(self):
-        """Open the computer page in GLPI using the default web browser."""
         if not self.last_added_computer_id:
             messagebox.showwarning(
                 "No Computer Available", 
@@ -734,13 +705,11 @@ class AddComputerFrame(ttk.Frame):
             return
         
         try:
-            # Extract base URL from the API URL
             base_url = glpi.api_url.replace("/apirest.php", "")
             computer_url = f"{base_url}/front/computer.form.php?id={self.last_added_computer_id}"
             
             logging.info(f"Opening computer {self.last_added_computer_id} in browser: {computer_url}")
             
-            # Open URL in default browser
             import webbrowser
             webbrowser.open(computer_url)
             
@@ -751,15 +720,13 @@ class AddComputerFrame(ttk.Frame):
             messagebox.showerror("Error", f"Failed to open computer in GLPI:\n{str(e)}", parent=self)
 
     def clear_form(self):
-        for var in self.basic_vars.values(): var.set("")
-        for var in self.hardware_vars.values(): var.set("")
+        for var in self.basic_vars.values(): 
+            var.set("")
+        for var in self.hardware_vars.values(): 
+            var.set("")
         self.load_defaults()
-        # Note: We intentionally DON'T reset the computer ID here so users can still open the last added computer
-        # If you want to reset it, uncomment the next line:
-        # self.last_added_computer_id = None
 
 class SearchFrame(ttk.Frame):
-    # This class is unchanged but included for completeness.
     def __init__(self, parent, controller):
         super().__init__(parent, padding=10)
         self.controller = controller
@@ -783,7 +750,8 @@ class SearchFrame(ttk.Frame):
 
     def _perform_search(self, event=None):
         query = self.query_var.get().strip()
-        if not query: return
+        if not query: 
+            return
         
         self.results_text.config(state="normal", cursor="wait")
         self.results_text.delete("1.0", tk.END)
@@ -802,7 +770,10 @@ class SearchFrame(ttk.Frame):
                 formatted_result = result_str
             self.after(0, self._update_results, formatted_result)
         except Exception as e:
-            self.after(0, self._update_results, f"An error occurred:\n{str(e)}")
+            error_msg = f"An error occurred:\n{str(e)}"
+            if "401" in str(e) or "Unauthorized" in str(e):
+                error_msg = "Session expired. Please logout and login again."
+            self.after(0, self._update_results, error_msg)
 
     def _update_results(self, result_text):
         self.results_text.delete("1.0", tk.END)
@@ -810,7 +781,6 @@ class SearchFrame(ttk.Frame):
         self.results_text.config(state="disabled", cursor="")
 
 class MainFrame(ttk.Frame):
-    # This class is unchanged but included for completeness.
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
@@ -833,7 +803,6 @@ class MainFrame(ttk.Frame):
         notebook.add(search_tab, text="Search")
 
 class GLPIGUIApp(tk.Tk):
-    # This class is unchanged but included for completeness.
     def __init__(self):
         super().__init__()
         self.config_manager = ConfigManager()
@@ -877,7 +846,10 @@ class GLPIGUIApp(tk.Tk):
     def check_session_and_start(self):
         if self.config_manager.config["authentication"]["remember_session"] and self.config_manager.is_session_valid():
             session = self.config_manager.config["session"]
-            self.on_login_success(session["token"], session["username"], False)
+            if glpi.restore_session(session["token"], session["username"]):
+                self.on_login_success(session["token"], session["username"], False)
+            else:
+                self.show_login_frame()
         else:
             self.show_login_frame()
 
@@ -930,11 +902,10 @@ class GLPIGUIApp(tk.Tk):
         self.show_login_frame()
 
     def cleanup_session(self):
-        if hasattr(glpi, 'session_token') and glpi.session_token:
-            try: glpi.killsession()
-            except: pass
-        glpi.session_token = None
-        if hasattr(glpi, 'username'): glpi.username = None
+        try: 
+            glpi.killsession()
+        except: 
+            pass
         self.config_manager.clear_session()
 
     def cleanup(self):
