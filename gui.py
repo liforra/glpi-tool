@@ -136,7 +136,7 @@ class ConfigManager:
             return datetime.now() < datetime.fromisoformat(self.config["session"]["expires"])
         except: 
             return False
-# ThemeManager, CustomCheckbox, and CustomEyeButton classes remain unchanged
+
 class ThemeManager:
     @staticmethod
     def apply(root, config):
@@ -593,53 +593,6 @@ class LoginFrame(ttk.Frame):
             self.verify_ssl_var.get(),
             self.status_label
         )
-def add_computer(self):
-    if not self.basic_vars["serial"].get().strip():
-        messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
-        return
-
-    # Gather all data
-    data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
-    data["tech_user"] = self.username
-
-    # Check for missing components in GLPI
-    missing = []
-    # You can add more fields if you want to check for more components
-    component_checks = {
-        "GPU": ("DeviceGraphicCard", data.get("gpu")),
-        "CPU": ("DeviceProcessor", data.get("processor")),
-    }
-    for label, (itemtype, value) in component_checks.items():
-        if value and glpi.getId(itemtype, value) in (None, 1403, 1404):
-            missing.append(label)
-
-    if missing:
-        messagebox.showerror(
-            "Elemente fehlen",
-            "Leider wurden die folgenden Elemente nicht in der Datenbank gefunden:\n"
-            + "\n".join(missing) +
-            "\n\nKontaktiere einen Administrator um dieses Problem zu lösen.",
-            parent=self
-        )
-        return
-
-    # If all checks pass, proceed to add the computer
-    try:
-        computer_id = glpi.add("Computer", data)
-        if computer_id:
-            self.last_added_computer_id = computer_id
-            logging.info(f"Computer added successfully with ID: {computer_id}")
-            messagebox.showinfo("Success", f"Computer added with ID: {computer_id}\n\nYou can now click 'Open in GLPI' to view it in your browser.", parent=self)
-            self.clear_form()
-        else:
-            messagebox.showerror("Error", "Failed to add computer. Check logs.", parent=self)
-    except Exception as e:
-        logging.error(f"Error adding computer: {e}")
-        if "401" in str(e) or "Unauthorized" in str(e):
-            messagebox.showerror("Session Expired", "Your session has expired. Please logout and login again.", parent=self)
-        else:
-            messagebox.showerror("Error", f"Error adding computer: {str(e)}", parent=self)
-            
 
 class MissingComponentsDialog(tk.Toplevel):
     def __init__(self, parent, missing_components, on_continue, *args, **kwargs):
@@ -826,16 +779,23 @@ class AddComputerFrame(ttk.Frame):
             messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
             return
 
+        # Gather all data
         data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
         data["tech_user"] = self.username
 
-        # Check for missing components in GLPI
+        # Check for missing components in GLPI - consolidated check with German labels
         missing = {}
         component_checks = {
             "GPU": ("DeviceGraphicCard", data.get("gpu")),
-            "CPU": ("DeviceProcessor", data.get("processor")),
+            "Prozessor": ("DeviceProcessor", data.get("processor")),  # German: Processor
+            "Arbeitsspeicher": ("DeviceMemory", data.get("ram")),     # German: RAM/Memory
+            "Festplatte": ("DeviceHardDrive", data.get("hdd")),       # German: Hard Drive
+            "Modell": ("ComputerModel", data.get("model")),           # German: Model
+            "Hersteller": ("Manufacturer", data.get("manufacturer")), # German: Manufacturer
         }
+        
         for label, (itemtype, value) in component_checks.items():
+            # Only check if a value is provided
             if value and glpi.getId(itemtype, value) in (None, 1403, 1404):
                 missing[label] = value
 
