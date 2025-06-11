@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, simpledialog
+from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
 import toml
 import os
 import logging
@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import threading
 import json
 import sys
+import webbrowser
+import csv
 
 # Add PIL import for image handling
 try:
@@ -155,7 +157,7 @@ class ThemeManager:
         fg = colors.get("foreground")
         primary = colors.get("primary")
         
-        widgets_to_style = ["TFrame", "TLabel", "TCheckbutton", "TLabelframe", "TNotebook"]
+        widgets_to_style = ["TFrame", "TLabel", "TCheckbutton", "TLabelframe", "TNotebook", "TMenubutton"]
         for widget in widgets_to_style:
             style.configure(widget, background=bg, foreground=fg)
         style.configure("TLabelframe.Label", background=bg, foreground=fg)
@@ -236,6 +238,23 @@ class ThemeManager:
                 ("active", ACCENT),
                 ("pressed", ACCENT)
             ]
+        )
+        
+        style.configure("TMenubutton",
+            background=WIDGET_BG,
+            foreground=FG,
+            borderwidth=0 if rounded else 1,
+            bordercolor=WIDGET_BORDER,
+            lightcolor=WIDGET_BG,
+            darkcolor=WIDGET_BG,
+            relief="flat",
+            padding=(8, 6),
+            font=("Segoe UI", 9, "bold"),
+            arrowsize=10
+        )
+        style.map("TMenubutton",
+            background=[("active", ACCENT), ("pressed", ACCENT)],
+            foreground=[("active", "white"), ("pressed", "white")]
         )
         
         style.configure("TEntry",
@@ -694,6 +713,26 @@ class AddComputerFrame(ttk.Frame):
             self.gather_system_info()
     
     def setup_ui(self):
+        # Status message frame at the top
+        self.status_frame = ttk.Frame(self)
+        self.status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.status_label = ttk.Label(
+            self.status_frame, 
+            text="Ready", 
+            foreground="green",
+            font=("Segoe UI", 10, "bold")
+        )
+        self.status_label.pack(side=tk.LEFT)
+        
+        # Progress indicator (hidden by default)
+        self.progress_label = ttk.Label(
+            self.status_frame,
+            text="⏳",
+            font=("Segoe UI", 12)
+        )
+        # Don't pack it initially - will be shown when needed
+        
         toolbar_frame = ttk.Frame(self)
         toolbar_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(toolbar_frame, text="🔄 Gather System Info", command=self.gather_system_info).pack(side=tk.LEFT)
@@ -704,9 +743,6 @@ class AddComputerFrame(ttk.Frame):
             command=self.open_computer_in_glpi
         )
         self.open_glpi_button.pack(side=tk.LEFT, padx=(10, 0))
-        
-        self.status_label = ttk.Label(self, text="Ready", foreground="green")
-        self.status_label.pack(in_=toolbar_frame, side=tk.RIGHT)
 
         content_frame = ttk.Frame(self)
         content_frame.pack(fill="both", expand=True)
@@ -730,10 +766,33 @@ class AddComputerFrame(ttk.Frame):
         hardware_lf.grid(row=0, column=1, padx=(5, 0), pady=5, sticky="nsew")
         self.hardware_vars = self._create_fields(hardware_lf, hardware_fields)
         
-        button_frame = ttk.Frame(self)
-        button_frame.pack(fill=tk.X, pady=(15, 0))
-        ttk.Button(button_frame, text="Add Computer", command=self.add_computer).pack(side=tk.RIGHT, padx=(10, 0))
-        ttk.Button(button_frame, text="Clear Form", command=self.clear_form).pack(side=tk.RIGHT)
+        # --- Bottom Bar for Import/Export and Add/Clear ---
+        bottom_bar = ttk.Frame(self)
+        bottom_bar.pack(fill=tk.X, pady=(15, 0))
+        
+        # Left side: Data Operations Menu
+        self.data_menu = tk.Menu(bottom_bar, tearoff=0)
+        self.data_menu.add_command(label="Import from file...", command=self.import_from_file)
+        self.data_menu.add_command(label="Export to file...", command=self.export_to_file)
+        
+        self.data_button = ttk.Button(bottom_bar, text="📁 Data", command=self.show_data_menu)
+        self.data_button.pack(side=tk.LEFT)
+        
+        # Right side: Add/Clear
+        right_button_frame = ttk.Frame(bottom_bar)
+        right_button_frame.pack(side=tk.RIGHT)
+        
+        ttk.Button(right_button_frame, text="Clear Form", command=self.clear_form).pack(side=tk.LEFT)
+        ttk.Button(right_button_frame, text="Add Computer", command=self.add_computer).pack(side=tk.LEFT, padx=(10, 0))
+
+    def show_data_menu(self):
+        """Displays the data menu at the button's position."""
+        try:
+            x = self.data_button.winfo_rootx()
+            y = self.data_button.winfo_rooty() + self.data_button.winfo_height()
+            self.data_menu.post(x, y)
+        except Exception as e:
+            logging.error(f"Failed to show data menu: {e}")
 
     def _create_fields(self, parent, fields):
         variables = {}
@@ -745,92 +804,226 @@ class AddComputerFrame(ttk.Frame):
         parent.grid_columnconfigure(1, weight=1)
         return variables
 
+    def _update_status(self, message, color="black", show_progress=False):
+        """Update the status message with optional progress indicator"""
+        self.status_label.config(text=message, foreground=color)
+        if show_progress:
+            self.progress_label.pack(side=tk.LEFT, padx=(10, 0))
+        else:
+            self.progress_label.pack_forget()
+
     def load_defaults(self):
         if self.controller.config_manager.config.get("ui", {}).get("auto_fill_defaults", True):
             self.basic_vars["location"].set(self.controller.config_manager.config.get("glpi", {}).get("default_location", ""))
     
     def gather_system_info(self):
-        self.status_label.config(text="Gathering system info...", foreground="orange")
+        self._update_status("Starting system information gathering...", "orange", show_progress=True)
         self.config(cursor="wait")
         threading.Thread(target=self._gather_system_info_thread, daemon=True).start()
     
     def _gather_system_info_thread(self):
         try:
-            info = SystemInfoGatherer().gather_all_info()
+            def status_callback(message):
+                # Update status in main thread
+                self.after(0, self._update_status, message, "orange", True)
+            
+            info = SystemInfoGatherer(status_callback=status_callback).gather_all_info()
             self.after(0, self._update_fields_with_system_info, info)
         except Exception as e:
             self.after(0, self._handle_gather_error, str(e))
     
     def _update_fields_with_system_info(self, info):
-        all_vars = {**self.basic_vars, **self.hardware_vars}
-        for key, var in all_vars.items():
-            if key in info and info.get(key) and info.get(key) != "Unknown":
-                var.set(info[key])
-        self.status_label.config(text="System info gathered", foreground="green")
+        self._set_form_data(info)
+        updated_fields = [k for k, v in info.items() if v and v != "Unknown"]
+        self._update_status(f"System info gathered successfully - {len(updated_fields)} fields updated", "green")
         self.config(cursor="")
     
     def _handle_gather_error(self, error):
-        self.status_label.config(text="Error gathering info", foreground="red")
+        self._update_status("Error gathering system information", "red")
         self.config(cursor="")
         logging.error(f"System info gathering error: {error}")
     
+    def _get_form_data(self):
+        """Collects all data from the form fields into a dictionary."""
+        all_vars = {**self.basic_vars, **self.hardware_vars}
+        return {key: var.get().strip() for key, var in all_vars.items()}
+
+    def _set_form_data(self, data):
+        """Populates the form fields from a dictionary."""
+        all_vars = {**self.basic_vars, **self.hardware_vars}
+        for key, var in all_vars.items():
+            if key in data:
+                var.set(data[key])
+
+    def export_to_file(self):
+        """Exports form data to a user-selected file (JSON or CSV)."""
+        data = self._get_form_data()
+        if not any(data.values()):
+            self._update_status("Form is empty, nothing to export", "orange")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export to File"
+        )
+        
+        if not file_path:
+            return
+
+        try:
+            if file_path.lower().endswith('.json'):
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=4)
+            elif file_path.lower().endswith('.csv'):
+                with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=data.keys())
+                    writer.writeheader()
+                    writer.writerow(data)
+            else:
+                # If user provides a name without extension, default to .json
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=4)
+            
+            self._update_status(f"Exported to {os.path.basename(file_path)}", "green")
+        except Exception as e:
+            self._update_status("Export failed", "red")
+            logging.error(f"File export failed: {e}")
+            messagebox.showerror("Export Error", f"Failed to export file:\n{e}", parent=self)
+
+    def import_from_file(self):
+        """Imports data from a user-selected file (JSON or CSV)."""
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Supported files", "*.json *.csv"), ("JSON files", "*.json"), ("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Import from File"
+        )
+        
+        if not file_path:
+            return
+
+        try:
+            if file_path.lower().endswith('.json'):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            elif file_path.lower().endswith('.csv'):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    data = next(reader, {}) # Get first row
+            else:
+                self._update_status("Unsupported file type", "red")
+                messagebox.showwarning("Unsupported File", "Please select a .json or .csv file.", parent=self)
+                return
+            
+            self._set_form_data(data)
+            self._update_status(f"Imported from {os.path.basename(file_path)}", "green")
+
+        except Exception as e:
+            self._update_status("Import failed", "red")
+            logging.error(f"File import failed from {file_path}: {e}")
+            messagebox.showerror("Import Error", f"Failed to import file:\n{e}", parent=self)
+
     def add_computer(self):
         if not self.basic_vars["serial"].get().strip():
+            self._update_status("Error: Serial Number is required", "red")
             messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
             return
 
-        # Gather all data
-        data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
+        data = self._get_form_data()
         data["tech_user"] = self.username
 
-        # Check for missing components in GLPI - consolidated check with German labels
-        missing = {}
+        self._update_status("Validating hardware components...", "orange", show_progress=True)
+
         component_checks = {
             "GPU": ("DeviceGraphicCard", data.get("gpu")),
-            "Prozessor": ("DeviceProcessor", data.get("processor")),  # German: Processor
-            "Arbeitsspeicher": ("DeviceMemory", data.get("ram")),     # German: RAM/Memory
-            "Festplatte": ("DeviceHardDrive", data.get("hdd")),       # German: Hard Drive
-            "Modell": ("ComputerModel", data.get("model")),           # German: Model
-            "Hersteller": ("Manufacturer", data.get("manufacturer")), # German: Manufacturer
+            "Prozessor": ("DeviceProcessor", data.get("processor")),
+            "Arbeitsspeicher": ("DeviceMemory", data.get("ram")),
+            "Festplatte": ("DeviceHardDrive", data.get("hdd")),
+            "Modell": ("ComputerModel", data.get("model")),
+            "Hersteller": ("Manufacturer", data.get("manufacturer")),
         }
         
-        for label, (itemtype, value) in component_checks.items():
-            # Only check if a value is provided
-            if value and glpi.getId(itemtype, value) in (None, 1403, 1404):
-                missing[label] = value
+        threading.Thread(target=self._validate_components_thread, args=(component_checks, data), daemon=True).start()
 
+    def _validate_components_thread(self, component_checks, data):
+        """Validate components in background thread"""
+        try:
+            missing = {}
+            checked_count = 0
+            total_checks = len([v for v in component_checks.values() if v[1]])
+            
+            for label, (itemtype, value) in component_checks.items():
+                if value:
+                    checked_count += 1
+                    self.after(0, self._update_status, f"Checking {label}... ({checked_count}/{total_checks})", "orange", True)
+                    
+                    result = glpi.getId(itemtype, value)
+                    if result in (None, 1403, 1404):
+                        missing[label] = value
+            
+            self.after(0, self._handle_validation_result, missing, data)
+            
+        except Exception as e:
+            self.after(0, self._handle_validation_error, str(e))
+
+    def _handle_validation_result(self, missing, data):
+        """Handle validation results in main thread"""
         if missing:
+            self._update_status(f"Validation complete - {len(missing)} components missing", "orange")
             def on_continue():
                 self._actually_add_computer(data)
             dialog = MissingComponentsDialog(self, missing, on_continue)
             self.wait_window(dialog)
             if dialog.result == "continue":
                 self._actually_add_computer(data)
-            # If cancel or closed, do nothing
-            return
+            else:
+                self._update_status("Computer addition cancelled", "gray")
+        else:
+            self._update_status("All components validated successfully", "green")
+            self._actually_add_computer(data)
 
-        # If all checks pass, proceed to add the computer
-        self._actually_add_computer(data)
+    def _handle_validation_error(self, error):
+        """Handle validation errors"""
+        self._update_status("Error during component validation", "red")
+        logging.error(f"Component validation error: {error}")
+        messagebox.showerror("Validation Error", f"Error validating components: {str(error)}", parent=self)
 
     def _actually_add_computer(self, data):
+        self._update_status("Sending new computer data to GLPI...", "orange", show_progress=True)
+        threading.Thread(target=self._add_computer_thread, args=(data,), daemon=True).start()
+
+    def _add_computer_thread(self, data):
+        """Add computer in background thread"""
         try:
             computer_id = glpi.add("Computer", data)
-            if computer_id:
-                self.last_added_computer_id = computer_id
-                logging.info(f"Computer added successfully with ID: {computer_id}")
-                messagebox.showinfo("Success", f"Computer added with ID: {computer_id}\n\nYou can now click 'Open in GLPI' to view it in your browser.", parent=self)
-                self.clear_form()
-            else:
-                messagebox.showerror("Error", "Failed to add computer. Check logs.", parent=self)
+            self.after(0, self._handle_add_result, computer_id, data.get("name", "Unknown"))
         except Exception as e:
-            logging.error(f"Error adding computer: {e}")
-            if "401" in str(e) or "Unauthorized" in str(e):
-                messagebox.showerror("Session Expired", "Your session has expired. Please logout and login again.", parent=self)
-            else:
-                messagebox.showerror("Error", f"Error adding computer: {str(e)}", parent=self)
+            self.after(0, self._handle_add_error, str(e))
+
+    def _handle_add_result(self, computer_id, computer_name):
+        """Handle computer addition result in main thread"""
+        if computer_id:
+            self.last_added_computer_id = computer_id
+            logging.info(f"Computer added successfully with ID: {computer_id}")
+            self._update_status(f"Computer '{computer_name}' added successfully (ID: {computer_id})", "green")
+            messagebox.showinfo("Success", f"Computer added with ID: {computer_id}\n\nYou can now click 'Open in GLPI' to view it in your browser.", parent=self)
+            self.clear_form()
+        else:
+            self._update_status("Failed to add computer", "red")
+            messagebox.showerror("Error", "Failed to add computer. Check logs.", parent=self)
+
+    def _handle_add_error(self, error):
+        """Handle computer addition errors"""
+        logging.error(f"Error adding computer: {error}")
+        if "401" in str(error) or "Unauthorized" in str(error):
+            self._update_status("Session expired - please login again", "red")
+            messagebox.showerror("Session Expired", "Your session has expired. Please logout and login again.", parent=self)
+        else:
+            self._update_status("Error adding computer", "red")
+            messagebox.showerror("Error", f"Error adding computer: {str(error)}", parent=self)
 
     def open_computer_in_glpi(self):
         if not self.last_added_computer_id:
+            self._update_status("No computer available to open", "orange")
             messagebox.showwarning(
                 "No Computer Available", 
                 "No computer ID available.\n\nPlease add a computer first, then you can open it in GLPI.", 
@@ -844,13 +1037,13 @@ class AddComputerFrame(ttk.Frame):
             
             logging.info(f"Opening computer {self.last_added_computer_id} in browser: {computer_url}")
             
-            import webbrowser
             webbrowser.open(computer_url)
             
-            self.status_label.config(text=f"Opened computer {self.last_added_computer_id} in browser", foreground="green")
+            self._update_status(f"Opened computer {self.last_added_computer_id} in browser", "green")
             
         except Exception as e:
             logging.error(f"Failed to open computer in GLPI: {e}")
+            self._update_status("Failed to open computer in browser", "red")
             messagebox.showerror("Error", f"Failed to open computer in GLPI:\n{str(e)}", parent=self)
 
     def clear_form(self):
@@ -859,6 +1052,7 @@ class AddComputerFrame(ttk.Frame):
         for var in self.hardware_vars.values(): 
             var.set("")
         self.load_defaults()
+        self._update_status("Form cleared", "gray")
 
 class SearchFrame(ttk.Frame):
     def __init__(self, parent, controller):
@@ -867,6 +1061,26 @@ class SearchFrame(ttk.Frame):
         self.setup_ui()
 
     def setup_ui(self):
+        # Status message frame at the top
+        self.status_frame = ttk.Frame(self)
+        self.status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.status_label = ttk.Label(
+            self.status_frame, 
+            text="Ready to search", 
+            foreground="green",
+            font=("Segoe UI", 10, "bold")
+        )
+        self.status_label.pack(side=tk.LEFT)
+        
+        # Progress indicator (hidden by default)
+        self.progress_label = ttk.Label(
+            self.status_frame,
+            text="🔍",
+            font=("Segoe UI", 12)
+        )
+        # Don't pack it initially - will be shown when needed
+        
         search_bar_frame = ttk.Frame(self)
         search_bar_frame.pack(fill=tk.X, pady=(0, 10))
         
@@ -882,42 +1096,89 @@ class SearchFrame(ttk.Frame):
         self.results_text = scrolledtext.ScrolledText(self, wrap=tk.WORD, state="disabled")
         self.results_text.pack(fill=tk.BOTH, expand=True)
 
+    def _update_status(self, message, color="black", show_progress=False):
+        """Update the status message with optional progress indicator"""
+        self.status_label.config(text=message, foreground=color)
+        if show_progress:
+            self.progress_label.pack(side=tk.LEFT, padx=(10, 0))
+        else:
+            self.progress_label.pack_forget()
+
     def _perform_search(self, event=None):
         query = self.query_var.get().strip()
-        if not query: 
+        if not query:
+            self._update_status("Please enter a serial number to search", "orange")
             return
+        
+        self._update_status(f"Starting search for '{query}'...", "orange", show_progress=True)
         
         self.results_text.config(state="normal", cursor="wait")
         self.results_text.delete("1.0", tk.END)
-        self.results_text.insert(tk.END, f"Searching for '{query}'...")
         self.update_idletasks()
 
         threading.Thread(target=self._search_thread, args=(query,), daemon=True).start()
 
     def _search_thread(self, query):
         try:
-            # Check session before searching
+            # Step 1: Validate session
+            self.after(0, self._update_status, "Validating session...", "orange", True)
             if not hasattr(glpi, 'session_token') or not glpi.session_token:
-                self.after(0, self._update_results, "Session expired. Please logout and login again.")
+                self.after(0, self._handle_search_error, "Session expired. Please logout and login again.")
                 return
-                
+            
+            # Step 2: Send request
+            self.after(0, self._update_status, "Sending search request to GLPI...", "orange", True)
             result_str = glpi.search("serial", query)
+            
+            # Step 3: Process response
+            self.after(0, self._update_status, "Received response, processing results...", "orange", True)
             try:
                 result_json = json.loads(result_str)
                 formatted_result = json.dumps(result_json, indent=2)
+                
+                # Count results
+                result_count = 0
+                if isinstance(result_json, dict) and "totalcount" in result_json:
+                    result_count = result_json["totalcount"]
+                elif isinstance(result_json, list):
+                    result_count = len(result_json)
+                
+                self.after(0, self._handle_search_success, formatted_result, query, result_count)
             except json.JSONDecodeError:
-                formatted_result = result_str
-            self.after(0, self._update_results, formatted_result)
+                self.after(0, self._handle_search_success, result_str, query, "unknown")
+                
         except Exception as e:
             error_msg = f"An error occurred:\n{str(e)}"
             if "401" in str(e) or "Unauthorized" in str(e):
                 error_msg = "Session expired. Please logout and login again."
-            self.after(0, self._update_results, error_msg)
+            self.after(0, self._handle_search_error, error_msg)
 
-    def _update_results(self, result_text):
+    def _handle_search_success(self, result_text, query, result_count):
+        """Handle successful search results"""
         self.results_text.delete("1.0", tk.END)
         self.results_text.insert(tk.END, result_text)
         self.results_text.config(state="disabled", cursor="")
+        
+        if isinstance(result_count, int):
+            if result_count == 0:
+                self._update_status(f"No results found for '{query}'", "orange")
+            elif result_count == 1:
+                self._update_status(f"Found 1 result for '{query}'", "green")
+            else:
+                self._update_status(f"Found {result_count} results for '{query}'", "green")
+        else:
+            self._update_status(f"Search completed for '{query}'", "green")
+
+    def _handle_search_error(self, error_msg):
+        """Handle search errors"""
+        self.results_text.delete("1.0", tk.END)
+        self.results_text.insert(tk.END, error_msg)
+        self.results_text.config(state="disabled", cursor="")
+        
+        if "Session expired" in error_msg:
+            self._update_status("Session expired - please login again", "red")
+        else:
+            self._update_status("Search failed", "red")
 
 class MainFrame(ttk.Frame):
     def __init__(self, parent, controller):
@@ -926,11 +1187,18 @@ class MainFrame(ttk.Frame):
 
         menubar = tk.Menu(self.controller)
         self.controller.config(menu=menubar)
+        
+        # File menu
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Logout", command=self.controller.logout)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.controller.destroy)
+        
+        # Help menu
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Issues", command=self._open_issues_page)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=5, pady=5)
@@ -940,6 +1208,20 @@ class MainFrame(ttk.Frame):
 
         notebook.add(add_computer_tab, text="Add Computer")
         notebook.add(search_tab, text="Search")
+
+    def _open_issues_page(self):
+        """Open the issues page in the default browser"""
+        try:
+            issues_url = "https://gitea.liforra.de/liforra/glpi-tui/issues"
+            webbrowser.open(issues_url)
+            logging.info(f"Opened issues page: {issues_url}")
+        except Exception as e:
+            logging.error(f"Failed to open issues page: {e}")
+            messagebox.showerror(
+                "Error", 
+                f"Failed to open issues page in browser:\n{str(e)}\n\nPlease visit manually:\nhttps://gitea.liforra.de/liforra/glpi-tui/issues",
+                parent=self
+            )
 
 class GLPIGUIApp(tk.Tk):
     def __init__(self):
@@ -1014,7 +1296,7 @@ class GLPIGUIApp(tk.Tk):
 
     def show_login_frame(self):
         self.title("GLPI Login")
-        self.geometry("400x350")
+        self.geometry("450x350")
         self.config(menu=tk.Menu(self))
         self.switch_frame(LoginFrame)
 
@@ -1053,7 +1335,7 @@ class GLPIGUIApp(tk.Tk):
             self.config_manager.update_session(token, username)
         
         self.title(self.config_manager.config["application"]["name"])
-        self.geometry("850x500")
+        self.geometry("900x500")
         self.switch_frame(MainFrame)
 
     def logout(self):

@@ -107,28 +107,61 @@ def _clean_manufacturer_name(name):
     return cleaned_name.strip()
 
 class SystemInfoGatherer:
-    def __init__(self):
+    def __init__(self, status_callback=None):
         self.info = {}
         self.system = platform.system()
+        self.status_callback = status_callback
+        
+    def _update_status(self, message, step=None, total_steps=None):
+        """Update status via callback if provided."""
+        if self.status_callback:
+            if step is not None and total_steps is not None:
+                progress_msg = f"[{step}/{total_steps}] {message}"
+            else:
+                progress_msg = message
+            self.status_callback(progress_msg)
+        log.info(message)
 
     def gather_all_info(self):
         """Gather all system information using the best available methods."""
+        total_steps = 10
+        
         if self.system == "Windows":
             pythoncom.CoInitializeEx(0)
             
-        log.info("Starting system information gathering...")
-        self.info = {
-            "name": self.get_computer_name(),
-            "serial": self.get_serial_number(),
-            "manufacturer": self.get_manufacturer(),
-            "model": self.get_model(),
-            "os": self.get_operating_system(),
-            "os_version": self.get_os_version(),
-            "processor": self.get_processor(),
-            "gpu": self.get_gpu(),
-            "ram": self.get_ram_info(),
-            "hdd": self.get_storage_info(),
-        }
+        self._update_status("Initializing system information gathering...", 1, total_steps)
+        
+        self.info = {}
+        
+        self._update_status("Getting computer name...", 2, total_steps)
+        self.info["name"] = self.get_computer_name()
+        
+        self._update_status("Retrieving serial number...", 3, total_steps)
+        self.info["serial"] = self.get_serial_number()
+        
+        self._update_status("Detecting manufacturer...", 4, total_steps)
+        self.info["manufacturer"] = self.get_manufacturer()
+        
+        self._update_status("Getting system model...", 5, total_steps)
+        self.info["model"] = self.get_model()
+        
+        self._update_status("Identifying operating system...", 6, total_steps)
+        self.info["os"] = self.get_operating_system()
+        
+        self._update_status("Getting OS version...", 7, total_steps)
+        self.info["os_version"] = self.get_os_version()
+        
+        self._update_status("Detecting processor...", 8, total_steps)
+        self.info["processor"] = self.get_processor()
+        
+        self._update_status("Scanning graphics cards...", 9, total_steps)
+        self.info["gpu"] = self.get_gpu()
+        
+        self._update_status("Analyzing memory and storage...", 10, total_steps)
+        self.info["ram"] = self.get_ram_info()
+        self.info["hdd"] = self.get_storage_info()
+        
+        self._update_status("System information gathering completed successfully!")
         log.info("System information gathering complete.")
         return self.info
 
@@ -138,10 +171,13 @@ class SystemInfoGatherer:
     def get_serial_number(self):
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
+                self._update_status("Querying WMI for BIOS serial number...")
                 return wmi.WMI().Win32_BIOS()[0].SerialNumber.strip()
             except Exception as e:
                 log.warning(f"WMI failed to get serial number: {e}")
+                self._update_status("WMI query failed, serial number unavailable")
         elif self.system == "Linux":
+            self._update_status("Running dmidecode for serial number...")
             return _run_command(['sudo', 'dmidecode', '-s', 'system-serial-number'])
         return "Unknown"
 
@@ -150,10 +186,13 @@ class SystemInfoGatherer:
         full_name = "Unknown"
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
+                self._update_status("Querying WMI for system manufacturer...")
                 full_name = wmi.WMI().Win32_ComputerSystem()[0].Manufacturer
             except Exception as e:
                 log.warning(f"WMI failed to get manufacturer: {e}")
+                self._update_status("WMI query failed for manufacturer")
         elif self.system == "Linux":
+            self._update_status("Running dmidecode for manufacturer...")
             full_name = _run_command(['sudo', 'dmidecode', '-s', 'system-manufacturer'])
         
         return _clean_manufacturer_name(full_name)
@@ -161,25 +200,32 @@ class SystemInfoGatherer:
     def get_model(self):
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
+                self._update_status("Querying WMI for system model...")
                 return wmi.WMI().Win32_ComputerSystem()[0].Model.strip()
             except Exception as e:
                 log.warning(f"WMI failed to get model: {e}")
+                self._update_status("WMI query failed for model")
         elif self.system == "Linux":
+            self._update_status("Running dmidecode for system model...")
             return _run_command(['sudo', 'dmidecode', '-s', 'system-product-name'])
         return "Unknown"
 
     def get_operating_system(self):
         if self.system == "Windows":
+            self._update_status("Detecting Windows edition...")
             return self._get_windows_edition()
         elif self.system == "Linux":
+            self._update_status("Detecting Linux distribution...")
             return self._get_linux_distro()
         else:
             return platform.system()
 
     def get_os_version(self):
         if self.system == "Windows":
+            self._update_status("Getting Windows version information...")
             return self._get_windows_version()
         elif self.system == "Linux":
+            self._update_status("Getting Linux version information...")
             return self._get_linux_version()
         else:
             return platform.release()
@@ -189,6 +235,7 @@ class SystemInfoGatherer:
     def _get_windows_edition(self):
         # Try to get the marketing name (e.g., "Windows 11")
         try:
+            self._update_status("Running systeminfo command...")
             # Try using systeminfo (works on most Windows)
             output = subprocess.check_output("systeminfo", shell=True, text=True, encoding="utf-8", errors="ignore")
             match = re.search(r"OS Name:\s*(.*)", output)
@@ -203,7 +250,7 @@ class SystemInfoGatherer:
                     else:
                         return name
         except Exception:
-            pass
+            self._update_status("systeminfo command failed, using fallback...")
 
         # Fallback: Use platform.release()
         rel = platform.release()
@@ -226,6 +273,7 @@ class SystemInfoGatherer:
     def _get_windows_version(self):
         # Try to get the update version (e.g., "24H2", "22H2") from systeminfo
         try:
+            self._update_status("Analyzing Windows version details...")
             output = subprocess.check_output("systeminfo", shell=True, text=True, encoding="utf-8", errors="ignore")
             # Look for "24H2", "22H2", etc. anywhere in the output
             match = re.search(r"\b\d{2}H2\b", output)
@@ -236,7 +284,7 @@ class SystemInfoGatherer:
             if match2:
                 return match2.group(1)
         except Exception:
-            pass
+            self._update_status("systeminfo failed, checking registry...")
 
         # Try registry (DisplayVersion or ReleaseId)
         try:
@@ -255,7 +303,7 @@ class SystemInfoGatherer:
                 except FileNotFoundError:
                     pass
         except Exception:
-            pass
+            self._update_status("Registry access failed, using build number...")
 
         # Fallback: Try to extract from build number
         try:
@@ -285,13 +333,14 @@ class SystemInfoGatherer:
 
     def _get_linux_distro(self):
         try:
+            self._update_status("Running lsb_release...")
             # Try lsb_release
             output = subprocess.check_output(["lsb_release", "-d"], text=True)
             match = re.search(r"Description:\s*(.*)", output)
             if match:
                 return match.group(1).strip()
         except Exception:
-            pass
+            self._update_status("lsb_release failed, checking /etc/os-release...")
         # Try /etc/os-release
         try:
             with open("/etc/os-release") as f:
@@ -299,18 +348,19 @@ class SystemInfoGatherer:
                     if line.startswith("PRETTY_NAME="):
                         return line.strip().split("=", 1)[1].strip('"')
         except Exception:
-            pass
+            self._update_status("Could not determine Linux distribution")
         return "Linux"
 
     def _get_linux_version(self):
         try:
+            self._update_status("Getting Linux release version...")
             # Try lsb_release
             output = subprocess.check_output(["lsb_release", "-r"], text=True)
             match = re.search(r"Release:\s*(.*)", output)
             if match:
                 return match.group(1).strip()
         except Exception:
-            pass
+            self._update_status("lsb_release failed, checking /etc/os-release...")
         # Try /etc/os-release
         try:
             with open("/etc/os-release") as f:
@@ -318,17 +368,20 @@ class SystemInfoGatherer:
                     if line.startswith("VERSION_ID="):
                         return line.strip().split("=", 1)[1].strip('"')
         except Exception:
-            pass
+            self._update_status("Could not determine Linux version")
         return platform.release()
 
     def get_processor(self):
         full_name = "Unknown"
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
+                self._update_status("Querying WMI for processor information...")
                 full_name = wmi.WMI().Win32_Processor()[0].Name.strip()
             except Exception as e:
                 log.warning(f"WMI failed to get CPU name: {e}")
+                self._update_status("WMI processor query failed")
         elif self.system == "Linux":
+            self._update_status("Running lscpu for processor information...")
             output = _run_command(['lscpu'])
             if output:
                 match = re.search(r'Model name:\s+(.+)', output)
@@ -342,13 +395,16 @@ class SystemInfoGatherer:
         
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
+                self._update_status("Querying WMI for graphics cards...")
                 wmi_gpus = wmi.WMI().Win32_VideoController()
                 for gpu in wmi_gpus:
                     if gpu.Name:
                         gpus.append(gpu.Name.strip())
             except Exception as e:
                 log.warning(f"WMI failed to get GPU names: {e}")
+                self._update_status("WMI graphics query failed")
         elif self.system == "Linux":
+            self._update_status("Running lspci for graphics information...")
             output = _run_command(['lspci'])
             if output:
                 for line in output.splitlines():
@@ -357,15 +413,19 @@ class SystemInfoGatherer:
                         gpus.append(gpu_name)
         
         if not gpus:
+            self._update_status("No graphics cards detected")
             return "Unknown"
         
+        self._update_status(f"Found {len(gpus)} graphics adapter(s), filtering...")
         # Filter out virtual/fake graphics adapters
         filtered_gpus = self._filter_virtual_gpus(gpus)
         
         if not filtered_gpus:
+            self._update_status("No physical graphics cards found after filtering")
             return "Unknown"
         
         # Prioritize dedicated graphics cards over integrated ones
+        self._update_status("Prioritizing dedicated graphics cards...")
         prioritized_gpu = self._prioritize_gpu(filtered_gpus)
         
         return _clean_gpu_name(prioritized_gpu)
@@ -456,6 +516,7 @@ class SystemInfoGatherer:
         ram_type = ""
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
+                self._update_status("Querying WMI for memory information...")
                 c = wmi.WMI()
                 total_bytes = sum(int(mem.Capacity) for mem in c.Win32_PhysicalMemory())
                 total_gb = round(total_bytes / (1024**3))
@@ -464,7 +525,9 @@ class SystemInfoGatherer:
                 ram_type = mem_types.get(wmi_mem_type, "")
             except Exception as e:
                 log.warning(f"WMI failed to get detailed RAM info: {e}")
+                self._update_status("WMI memory query failed")
         elif self.system == "Linux":
+            self._update_status("Running dmidecode for memory information...")
             output = _run_command(['sudo', 'dmidecode', '--type', 'memory'])
             if output:
                 total_gb_calc = 0
@@ -481,12 +544,14 @@ class SystemInfoGatherer:
                 total_gb = round(total_gb_calc)
 
         if total_gb == 0 and psutil:
+            self._update_status("Using psutil for memory information...")
             total_gb = round(psutil.virtual_memory().total / (1024**3))
         return f"{ram_type} {total_gb} GB".strip() if total_gb else "Unknown"
 
     def get_storage_info(self):
         if psutil:
             try:
+                self._update_status("Analyzing storage information...")
                 mount_point = 'C:\\' if self.system == "Windows" else '/'
                 usage = psutil.disk_usage(mount_point)
                 actual_gib = usage.total / (1024**3)
@@ -494,12 +559,17 @@ class SystemInfoGatherer:
                 return f"SSD {rounded_gb} GB"
             except Exception as e:
                 log.warning(f"psutil failed to get disk info: {e}")
+                self._update_status("Storage analysis failed")
         return "Unknown"
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    
+    def status_callback(message):
+        print(f"STATUS: {message}")
+    
     print("Attempting to gather system info. If it fails, try running as Administrator/sudo.")
-    gatherer = SystemInfoGatherer()
+    gatherer = SystemInfoGatherer(status_callback=status_callback)
     info = gatherer.gather_all_info()
     print("\n--- Cleaned System Information ---")
     print(json.dumps(info, indent=2))
