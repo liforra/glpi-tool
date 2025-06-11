@@ -59,14 +59,42 @@ def _clean_processor_name(name):
 
 def _clean_gpu_name(name):
     """Extracts the core model name from a full GPU brand string."""
-    if not name: return "Unknown"
+    if not name: 
+        return "Unknown"
+    
+    # Remove common prefixes and suffixes
     cleaned_name = re.sub(r'\((R|TM)\)', '', name).strip()
-    prefixes = ["Intel", "NVIDIA", "AMD"]
-    for prefix in prefixes:
-        if cleaned_name.lower().startswith(prefix.lower()):
-            cleaned_name = cleaned_name[len(prefix):].strip()
-            break
-    return cleaned_name if cleaned_name else name
+    cleaned_name = re.sub(r'\s+', ' ', cleaned_name)  # Normalize whitespace
+    
+    # Remove manufacturer prefixes but keep the important part
+    prefixes_to_remove = [
+        "NVIDIA ", "AMD ", "Intel\\(R\\) ", "Intel ", 
+        "Advanced Micro Devices, Inc\\. ", "Corporation "
+    ]
+    
+    for prefix in prefixes_to_remove:
+        cleaned_name = re.sub(f"^{prefix}", "", cleaned_name, flags=re.IGNORECASE)
+    
+    # Special handling for common GPU naming patterns
+    if "geforce" in cleaned_name.lower():
+        # Extract GeForce model (e.g., "GeForce GTX 1060" -> "GeForce GTX 1060")
+        match = re.search(r'(geforce\s+(?:gtx|rtx)?\s*\d+\w*)', cleaned_name, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    if "radeon" in cleaned_name.lower():
+        # Extract Radeon model (e.g., "Radeon RX 580" -> "Radeon RX 580")
+        match = re.search(r'(radeon\s+(?:rx|r\d+)?\s*\d+\w*)', cleaned_name, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    if "intel" in cleaned_name.lower() and ("hd" in cleaned_name.lower() or "uhd" in cleaned_name.lower() or "iris" in cleaned_name.lower()):
+        # Extract Intel integrated graphics (e.g., "Intel HD Graphics 620" -> "Intel HD Graphics 620")
+        match = re.search(r'(intel\s+(?:hd|uhd|iris)\s+graphics\s*\d*)', cleaned_name, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    return cleaned_name.strip() if cleaned_name.strip() else name
 
 def _clean_manufacturer_name(name):
     """Removes common corporate suffixes from a manufacturer name."""
@@ -141,11 +169,156 @@ class SystemInfoGatherer:
         return "Unknown"
 
     def get_operating_system(self):
-        return platform.system()
+        if self.system == "Windows":
+            return self._get_windows_edition()
+        elif self.system == "Linux":
+            return self._get_linux_distro()
+        else:
+            return platform.system()
 
     def get_os_version(self):
         if self.system == "Windows":
+            return self._get_windows_version()
+        elif self.system == "Linux":
+            return self._get_linux_version()
+        else:
             return platform.release()
+
+    # --- Windows helpers ---
+
+    def _get_windows_edition(self):
+        # Try to get the marketing name (e.g., "Windows 11")
+        try:
+            # Try using systeminfo (works on most Windows)
+            output = subprocess.check_output("systeminfo", shell=True, text=True, encoding="utf-8", errors="ignore")
+            match = re.search(r"OS Name:\s*(.*)", output)
+            if match:
+                name = match.group(1).strip()
+                # Usually like "Microsoft Windows 11 Pro"
+                if "Windows" in name:
+                    # Return "Windows 11" or "Windows 10" etc.
+                    match2 = re.search(r"(Windows \d+)", name)
+                    if match2:
+                        return match2.group(1)
+                    else:
+                        return name
+        except Exception:
+            pass
+
+        # Fallback: Use platform.release()
+        rel = platform.release()
+        if rel == "10":
+            # Could be Windows 10 or 11, try to check build number
+            build = platform.version()
+            try:
+                build_num = int(build.split(".")[2])
+                if build_num >= 22000:
+                    return "Windows 11"
+                else:
+                    return "Windows 10"
+            except Exception:
+                return "Windows 10/11"
+        elif rel == "11":
+            return "Windows 11"
+        else:
+            return f"Windows {rel}"
+
+    def _get_windows_version(self):
+        # Try to get the update version (e.g., "24H2", "22H2") from systeminfo
+        try:
+            output = subprocess.check_output("systeminfo", shell=True, text=True, encoding="utf-8", errors="ignore")
+            # Look for "24H2", "22H2", etc. anywhere in the output
+            match = re.search(r"\b\d{2}H2\b", output)
+            if match:
+                return match.group(0)
+            # Try to find "Version: 24H2" or "Version 24H2"
+            match2 = re.search(r"Version[:\s]+(\d{2}H2)", output)
+            if match2:
+                return match2.group(1)
+        except Exception:
+            pass
+
+        # Try registry (DisplayVersion or ReleaseId)
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") as key:
+                try:
+                    display_version, _ = winreg.QueryValueEx(key, "DisplayVersion")
+                    if re.match(r"\d{2}H2", display_version):
+                        return display_version
+                except FileNotFoundError:
+                    pass
+                try:
+                    release_id, _ = winreg.QueryValueEx(key, "ReleaseId")
+                    if re.match(r"\d{2}H2", release_id):
+                        return release_id
+                except FileNotFoundError:
+                    pass
+        except Exception:
+            pass
+
+        # Fallback: Try to extract from build number
+        try:
+            build = platform.version()
+            build_num = int(build.split(".")[2])
+            # Map known build numbers to marketing versions
+            build_map = {
+                22000: "21H2",
+                22621: "22H2",
+                26100: "24H2",
+                # Add more mappings as needed
+            }
+            for b, v in build_map.items():
+                if build_num >= b:
+                    version = v
+            if 'version' in locals():
+                return version
+            else:
+                return f"Build {build_num}"
+        except Exception:
+            pass
+
+        # Last fallback
+        return platform.release()
+
+    # --- Linux helpers ---
+
+    def _get_linux_distro(self):
+        try:
+            # Try lsb_release
+            output = subprocess.check_output(["lsb_release", "-d"], text=True)
+            match = re.search(r"Description:\s*(.*)", output)
+            if match:
+                return match.group(1).strip()
+        except Exception:
+            pass
+        # Try /etc/os-release
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        return line.strip().split("=", 1)[1].strip('"')
+        except Exception:
+            pass
+        return "Linux"
+
+    def _get_linux_version(self):
+        try:
+            # Try lsb_release
+            output = subprocess.check_output(["lsb_release", "-r"], text=True)
+            match = re.search(r"Release:\s*(.*)", output)
+            if match:
+                return match.group(1).strip()
+        except Exception:
+            pass
+        # Try /etc/os-release
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("VERSION_ID="):
+                        return line.strip().split("=", 1)[1].strip('"')
+        except Exception:
+            pass
         return platform.release()
 
     def get_processor(self):
@@ -164,22 +337,119 @@ class SystemInfoGatherer:
         return _clean_processor_name(full_name)
 
     def get_gpu(self):
-        full_name = "Unknown"
+        """Get the primary GPU, prioritizing dedicated cards over integrated ones."""
+        gpus = []
+        
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
-                gpus = [gpu.Name for gpu in wmi.WMI().Win32_VideoController() if gpu.Name]
-                real_gpus = [gpu for gpu in gpus if "Microsoft Basic Display Adapter" not in gpu]
-                full_name = ", ".join(real_gpus) if real_gpus else ", ".join(gpus)
+                wmi_gpus = wmi.WMI().Win32_VideoController()
+                for gpu in wmi_gpus:
+                    if gpu.Name:
+                        gpus.append(gpu.Name.strip())
             except Exception as e:
-                log.warning(f"WMI failed to get GPU name: {e}")
+                log.warning(f"WMI failed to get GPU names: {e}")
         elif self.system == "Linux":
             output = _run_command(['lspci'])
             if output:
                 for line in output.splitlines():
                     if "VGA compatible controller" in line:
-                        full_name = line.split(":")[-1].strip()
-                        break
-        return _clean_gpu_name(full_name)
+                        gpu_name = line.split(":")[-1].strip()
+                        gpus.append(gpu_name)
+        
+        if not gpus:
+            return "Unknown"
+        
+        # Filter out virtual/fake graphics adapters
+        filtered_gpus = self._filter_virtual_gpus(gpus)
+        
+        if not filtered_gpus:
+            return "Unknown"
+        
+        # Prioritize dedicated graphics cards over integrated ones
+        prioritized_gpu = self._prioritize_gpu(filtered_gpus)
+        
+        return _clean_gpu_name(prioritized_gpu)
+
+    def _filter_virtual_gpus(self, gpu_list):
+        """Filter out virtual, remote, and fake graphics adapters."""
+        virtual_keywords = [
+            "spacedesk",
+            "parsec",
+            "teamviewer",
+            "vnc",
+            "rdp",
+            "remote",
+            "virtual",
+            "microsoft basic display adapter",
+            "microsoft basic render driver",
+            "generic pnp monitor",
+            "standard vga",
+            "citrix",
+            "vmware",
+            "virtualbox",
+            "hyper-v",
+            "qemu",
+            "parallels"
+        ]
+        
+        filtered = []
+        for gpu in gpu_list:
+            gpu_lower = gpu.lower()
+            is_virtual = any(keyword in gpu_lower for keyword in virtual_keywords)
+            if not is_virtual:
+                filtered.append(gpu)
+        
+        log.debug(f"Filtered GPUs: {gpu_list} -> {filtered}")
+        return filtered
+
+    def _prioritize_gpu(self, gpu_list):
+        """Prioritize dedicated graphics cards over integrated ones."""
+        if len(gpu_list) == 1:
+            return gpu_list[0]
+        
+        # Dedicated GPU keywords (higher priority)
+        dedicated_keywords = [
+            "geforce", "gtx", "rtx", "quadro", "tesla",  # NVIDIA
+            "radeon", "rx ", "vega", "fury", "firepro",  # AMD
+            "arc"  # Intel Arc (dedicated)
+        ]
+        
+        # Integrated GPU keywords (lower priority)
+        integrated_keywords = [
+            "intel hd", "intel uhd", "intel iris", "intel graphics",
+            "amd radeon graphics", "radeon graphics",
+            "vega graphics", "ryzen", "apu"
+        ]
+        
+        dedicated_gpus = []
+        integrated_gpus = []
+        other_gpus = []
+        
+        for gpu in gpu_list:
+            gpu_lower = gpu.lower()
+            
+            # Check if it's a dedicated GPU
+            if any(keyword in gpu_lower for keyword in dedicated_keywords):
+                dedicated_gpus.append(gpu)
+            # Check if it's an integrated GPU
+            elif any(keyword in gpu_lower for keyword in integrated_keywords):
+                integrated_gpus.append(gpu)
+            else:
+                other_gpus.append(gpu)
+        
+        # Priority: Dedicated > Other > Integrated
+        if dedicated_gpus:
+            selected = dedicated_gpus[0]
+            log.debug(f"Selected dedicated GPU: {selected} from {gpu_list}")
+            return selected
+        elif other_gpus:
+            selected = other_gpus[0]
+            log.debug(f"Selected other GPU: {selected} from {gpu_list}")
+            return selected
+        else:
+            selected = integrated_gpus[0] if integrated_gpus else gpu_list[0]
+            log.debug(f"Selected integrated GPU: {selected} from {gpu_list}")
+            return selected
 
     def get_ram_info(self):
         total_gb = 0

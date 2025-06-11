@@ -593,6 +593,140 @@ class LoginFrame(ttk.Frame):
             self.verify_ssl_var.get(),
             self.status_label
         )
+def add_computer(self):
+    if not self.basic_vars["serial"].get().strip():
+        messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
+        return
+
+    # Gather all data
+    data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
+    data["tech_user"] = self.username
+
+    # Check for missing components in GLPI
+    missing = []
+    # You can add more fields if you want to check for more components
+    component_checks = {
+        "GPU": ("DeviceGraphicCard", data.get("gpu")),
+        "CPU": ("DeviceProcessor", data.get("processor")),
+    }
+    for label, (itemtype, value) in component_checks.items():
+        if value and glpi.getId(itemtype, value) in (None, 1403, 1404):
+            missing.append(label)
+
+    if missing:
+        messagebox.showerror(
+            "Elemente fehlen",
+            "Leider wurden die folgenden Elemente nicht in der Datenbank gefunden:\n"
+            + "\n".join(missing) +
+            "\n\nKontaktiere einen Administrator um dieses Problem zu lösen.",
+            parent=self
+        )
+        return
+
+    # If all checks pass, proceed to add the computer
+    try:
+        computer_id = glpi.add("Computer", data)
+        if computer_id:
+            self.last_added_computer_id = computer_id
+            logging.info(f"Computer added successfully with ID: {computer_id}")
+            messagebox.showinfo("Success", f"Computer added with ID: {computer_id}\n\nYou can now click 'Open in GLPI' to view it in your browser.", parent=self)
+            self.clear_form()
+        else:
+            messagebox.showerror("Error", "Failed to add computer. Check logs.", parent=self)
+    except Exception as e:
+        logging.error(f"Error adding computer: {e}")
+        if "401" in str(e) or "Unauthorized" in str(e):
+            messagebox.showerror("Session Expired", "Your session has expired. Please logout and login again.", parent=self)
+        else:
+            messagebox.showerror("Error", f"Error adding computer: {str(e)}", parent=self)
+            
+
+class MissingComponentsDialog(tk.Toplevel):
+    def __init__(self, parent, missing_components, on_continue, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self.title("Elemente fehlen")
+        self.resizable(False, False)
+        self.grab_set()
+        self.result = None
+
+        # Theme colors (match your purple theme)
+        BG = "#201a2b"
+        FG = "#dcd4e8"
+        ACCENT = "#9966cc"
+        DANGER = "#c0392b"
+        BTN_BG = "#302a40"
+        BTN_FG = FG
+
+        self.configure(bg=BG)
+
+        # Build message
+        msg = "Leider wurden die folgenden Elemente nicht in der Datenbank gefunden:\n\n"
+        for label, value in missing_components.items():
+            msg += f"{label}: {value}\n"
+        msg += "\nKontaktiere einen Administrator um dieses Problem zu lösen."
+
+        # Message area
+        msg_frame = tk.Frame(self, bg=BG)
+        msg_frame.pack(padx=20, pady=(20, 10), fill="x")
+        msg_label = tk.Label(
+            msg_frame, text=msg, justify="left", anchor="w",
+            bg=BG, fg=FG, font=("Segoe UI", 10), wraplength=400
+        )
+        msg_label.pack(fill="x")
+
+        # Button frame
+        btn_frame = tk.Frame(self, bg=BG)
+        btn_frame.pack(pady=(0, 10), padx=10, fill="x")
+
+        # Cancel button
+        cancel_btn = ttk.Button(btn_frame, text="Abbrechen", command=self._cancel)
+        cancel_btn.pack(side="left", padx=5)
+
+        # Copy message button
+        copy_btn = ttk.Button(btn_frame, text="Nachricht kopieren", command=lambda: self._copy_message(msg))
+        copy_btn.pack(side="left", padx=5)
+
+        # Advanced/Show More for "Continue Anyway"
+        self.advanced_shown = False
+        self.advanced_btn = ttk.Button(btn_frame, text="Mehr anzeigen...", command=self._show_advanced)
+        self.advanced_btn.pack(side="left", padx=5)
+
+        # Placeholder for the "Continue Anyway" button
+        self.continue_btn = None
+        self.on_continue = on_continue
+
+        # Style for the danger button
+        style = ttk.Style(self)
+        style.configure("Danger.TButton",
+                        background=DANGER, foreground="white",
+                        font=("Segoe UI", 10, "bold"),
+                        borderwidth=0, focusthickness=3, focuscolor=ACCENT)
+        style.map("Danger.TButton",
+                  background=[("active", "#e74c3c")],
+                  foreground=[("active", "white")])
+
+    def _cancel(self):
+        self.result = "cancel"
+        self.destroy()
+
+    def _copy_message(self, msg):
+        self.clipboard_clear()
+        self.clipboard_append(msg)
+        messagebox.showinfo("Kopiert", "Die Nachricht wurde in die Zwischenablage kopiert.", parent=self)
+
+    def _show_advanced(self):
+        if not self.advanced_shown:
+            self.advanced_shown = True
+            # Add a red "Continue Anyway" button (styled)
+            self.continue_btn = ttk.Button(
+                self, text="Trotzdem fortfahren", style="Danger.TButton", command=self._continue_anyway
+            )
+            self.continue_btn.pack(pady=(10, 15), ipadx=10, ipady=3)
+            self.advanced_btn.config(state="disabled")
+
+    def _continue_anyway(self):
+        self.result = "continue"
+        self.destroy()
 
 class AddComputerFrame(ttk.Frame):
     def __init__(self, parent, controller):
@@ -691,21 +825,39 @@ class AddComputerFrame(ttk.Frame):
         if not self.basic_vars["serial"].get().strip():
             messagebox.showerror("Error", "Serial Number is a required field.", parent=self)
             return
-        
-        # Check if we have a valid session before proceeding
-        if not hasattr(glpi, 'session_token') or not glpi.session_token:
-            messagebox.showerror("Session Error", "No valid session. Please logout and login again.", parent=self)
-            return
-        
+
         data = {key: var.get().strip() for key, var in {**self.basic_vars, **self.hardware_vars}.items()}
         data["tech_user"] = self.username
-        
+
+        # Check for missing components in GLPI
+        missing = {}
+        component_checks = {
+            "GPU": ("DeviceGraphicCard", data.get("gpu")),
+            "CPU": ("DeviceProcessor", data.get("processor")),
+        }
+        for label, (itemtype, value) in component_checks.items():
+            if value and glpi.getId(itemtype, value) in (None, 1403, 1404):
+                missing[label] = value
+
+        if missing:
+            def on_continue():
+                self._actually_add_computer(data)
+            dialog = MissingComponentsDialog(self, missing, on_continue)
+            self.wait_window(dialog)
+            if dialog.result == "continue":
+                self._actually_add_computer(data)
+            # If cancel or closed, do nothing
+            return
+
+        # If all checks pass, proceed to add the computer
+        self._actually_add_computer(data)
+
+    def _actually_add_computer(self, data):
         try:
             computer_id = glpi.add("Computer", data)
             if computer_id:
                 self.last_added_computer_id = computer_id
                 logging.info(f"Computer added successfully with ID: {computer_id}")
-                
                 messagebox.showinfo("Success", f"Computer added with ID: {computer_id}\n\nYou can now click 'Open in GLPI' to view it in your browser.", parent=self)
                 self.clear_form()
             else:
