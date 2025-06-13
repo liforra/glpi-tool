@@ -1062,7 +1062,7 @@ class AddComputerFrame(ttk.Frame):
         # Add the German comment as required by the updated GLPI library
         hostname = os.popen('hostname').read().strip() or 'UNBEKANNTES GERÄT'
         data["comment"] = (f"\r\nDieses Rechengerät wurde automagisch von dem GLPI Client Version {APP_VERSION} hinzugefügt."
-                        f"\r\nDer Verantwortliche Nutzer ist {self.username} durch den Computer {hostname}")
+                        f"\r\nDer Verantwortliche Nutzer ist {self.username} durch den Computer {hostname}. #GLPICLIENT{APP_VERSION}")
 
         self._update_status("Validating hardware components...", "orange", show_progress=True)
 

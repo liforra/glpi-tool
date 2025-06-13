@@ -120,7 +120,7 @@ def getId(itemtype, query):
             return 1403
         response = json.loads(response)
         try:
-            log.debug(f'Requested {itemtype} has ID {response['data'][0]['2']}')
+            log.debug(f"Requested {itemtype} has ID {response['data'][0]['2']}")
             return response['data'][0]['2']
         except (KeyError, IndexError):
             log.warning(f'1404: No Result Matching {query} in {itemtype}')
