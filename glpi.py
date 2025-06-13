@@ -144,9 +144,9 @@ def add(itemtype, data):
                 "users_id_tech": getId("User", username),
                 "groups_id_tech": 1,
                 "computermodels_id": getId("ComputerModel", data.get("model")),
-                "comment": f"\r\nThis Computer was automagically added using The GLPIClient. {username} is responsible for any wrongdoings. Added from {(os.popen('hostname').read().strip() or 'Unknown Device')}",
+                "comment" : data.get("comment"),
                 "manufacturers_id": getId("Manufacturer", data.get("manufacturer")),
-                "computertypes_id": getId("ComputerType", data.get("computer_type")),  # Added this line
+                "computertypes_id": getId("ComputerType", data.get("computer_type")),
                 "_plugin_fields_funktionsfhigkeitfielddropdowns_id_defined": [7],
             }
 

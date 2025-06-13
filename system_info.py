@@ -43,14 +43,37 @@ def _run_command(command):
         return None
 
 def _round_storage_gb(gib):
-    """Rounds the OS-reported Gibibyte (GiB) size to the nearest common marketing Gigabyte (GB) size."""
-    if not gib: return 0
+    """Improved storage size rounding with more accurate marketing sizes."""
+    if not gib: 
+        return 0
+    
+    # Convert GiB to approximate GB (marketing)
     estimated_marketing_gb = gib * (1024**3 / 1000**3)
-    sizes = [120, 128, 240, 250, 256, 480, 500, 512, 960, 1000, 1024, 2048, 4096]
-    for size in sizes:
-        if size >= estimated_marketing_gb:
-            return size
-    return round(gib)
+    
+    # Extended list of common drive sizes
+    common_sizes = [
+        # Small drives
+        32, 64, 120, 128, 
+        # Medium drives  
+        240, 250, 256, 480, 500, 512,
+        # Large drives
+        960, 1000, 1024, 2000, 2048, 4000, 4096, 8000, 8192
+    ]
+    
+    # Find the closest matching size
+    best_match = min(common_sizes, key=lambda x: abs(x - estimated_marketing_gb))
+    
+    # Only use the best match if it's reasonably close (within 15%)
+    if abs(best_match - estimated_marketing_gb) / estimated_marketing_gb <= 0.15:
+        return best_match
+    
+    # If no close match, round to nearest reasonable size
+    if estimated_marketing_gb < 100:
+        return round(estimated_marketing_gb / 16) * 16  # Round to 16GB increments
+    elif estimated_marketing_gb < 1000:
+        return round(estimated_marketing_gb / 32) * 32  # Round to 32GB increments  
+    else:
+        return round(estimated_marketing_gb / 128) * 128  # Round to 128GB increments
 
 def _clean_processor_name(name):
     """Extracts the core model number from a full CPU brand string."""
@@ -769,18 +792,337 @@ class SystemInfoGatherer:
             return "Unknown"
 
     def get_storage_info(self):
+        """Get storage information with drive type detection (HDD, SSD, M.2 NVMe, M.2 SATA, mSATA)."""
+        if self.system == "Windows" and WMI_AVAILABLE:
+            try:
+                self._update_status("Analyzing Windows storage devices...")
+                return self._get_windows_storage_info()
+            except Exception as e:
+                log.warning(f"Windows storage detection failed: {e}")
+                self._update_status("Windows storage detection failed, using fallback...")
+        elif self.system == "Linux":
+            try:
+                self._update_status("Analyzing Linux storage devices...")
+                return self._get_linux_storage_info()
+            except Exception as e:
+                log.warning(f"Linux storage detection failed: {e}")
+                self._update_status("Linux storage detection failed, using fallback...")
+        
+        # Fallback to basic psutil detection
         if psutil:
             try:
-                self._update_status("Analyzing storage information...")
+                self._update_status("Using basic storage detection...")
                 mount_point = 'C:\\' if self.system == "Windows" else '/'
                 usage = psutil.disk_usage(mount_point)
                 actual_gib = usage.total / (1024**3)
                 rounded_gb = _round_storage_gb(actual_gib)
-                return f"SSD {rounded_gb} GB"
+                return f"SATA {rounded_gb} GB"  # Default assumption for modern systems
             except Exception as e:
                 log.warning(f"psutil failed to get disk info: {e}")
                 self._update_status("Storage analysis failed")
+        
         return "Unknown"
+
+    def _get_windows_storage_info(self):
+        """Get Windows storage information with drive type detection."""
+        pythoncom.CoInitializeEx(0)
+        c = wmi.WMI()
+        
+        # Get all physical disks and find the boot/system drive
+        disks = c.Win32_DiskDrive()
+        primary_disk = None
+        
+        # Method 1: Try to find the boot drive first
+        try:
+            logical_disks = c.Win32_LogicalDisk()
+            boot_drive_letter = None
+            for logical in logical_disks:
+                if logical.SystemDrive or (logical.DeviceID and logical.DeviceID.startswith('C:')):
+                    boot_drive_letter = logical.DeviceID
+                    break
+            
+            if boot_drive_letter:
+                # Find which physical disk contains the boot partition
+                partitions = c.Win32_DiskPartition()
+                for partition in partitions:
+                    logical_disks_on_partition = partition.associators("Win32_LogicalDiskToPartition")
+                    for logical in logical_disks_on_partition:
+                        if logical.DeviceID == boot_drive_letter:
+                            # Found the partition, now find the physical disk
+                            physical_disks = partition.associators("Win32_DiskDriveToDiskPartition")
+                            if physical_disks:
+                                primary_disk = physical_disks[0]
+                                break
+                    if primary_disk:
+                        break
+        except Exception as e:
+            log.warning(f"Boot drive detection failed: {e}")
+        
+        # Method 2: Fallback to largest drive if boot drive detection failed
+        if not primary_disk:
+            largest_size = 0
+            for disk in disks:
+                try:
+                    if disk.Size and int(disk.Size) > largest_size:
+                        largest_size = int(disk.Size)
+                        primary_disk = disk
+                except (ValueError, TypeError):
+                    continue
+        
+        # Method 3: Final fallback to first available disk
+        if not primary_disk and disks:
+            primary_disk = disks[0]
+        
+        if not primary_disk:
+            return "Unknown"
+        
+        # Calculate size more accurately
+        try:
+            disk_size_bytes = int(primary_disk.Size) if primary_disk.Size else 0
+            # Convert to GiB first, then round to marketing size
+            actual_gib = disk_size_bytes / (1024**3)
+            rounded_gb = _round_storage_gb(actual_gib)
+        except (ValueError, TypeError):
+            return "Unknown"
+        
+        # Determine drive type with better detection
+        drive_type = self._determine_windows_drive_type(primary_disk)
+        
+        # Log detailed information for debugging
+        log.debug(f"Selected disk: {getattr(primary_disk, 'Model', 'Unknown')} - "
+                  f"Size: {disk_size_bytes} bytes ({actual_gib:.1f} GiB) -> {rounded_gb} GB - "
+                  f"Type: {drive_type}")
+        
+        return f"{drive_type} {rounded_gb} GB"
+
+    def _determine_windows_drive_type(self, disk):
+        """Determine the type of Windows drive with improved detection."""
+        try:
+            # Get all available properties
+            interface = getattr(disk, 'InterfaceType', '').upper() if disk.InterfaceType else ''
+            model = getattr(disk, 'Model', '').upper() if disk.Model else ''
+            media_type = getattr(disk, 'MediaType', '').upper() if disk.MediaType else ''
+            caption = getattr(disk, 'Caption', '').upper() if disk.Caption else ''
+            
+            # Combine model and caption for better detection
+            full_model_info = f"{model} {caption}".strip()
+            
+            log.debug(f"Drive detection - Interface: {interface}, Model: {model}, "
+                      f"MediaType: {media_type}, Caption: {caption}")
+            
+            # Enhanced NVMe detection
+            nvme_indicators = ['NVME', 'NVM EXPRESS', 'NVME SSD', 'PM991', 'PM981', 'SN850', 
+                              'SN750', 'SN550', 'WD_BLACK', 'KINGSTON NV1', 'CRUCIAL P1', 
+                              'CRUCIAL P2', 'CRUCIAL P5']
+            
+            if (interface == 'NVME' or 
+                any(indicator in full_model_info for indicator in nvme_indicators)):
+                return "M.2 NVMe"
+            
+            # Enhanced SSD detection
+            ssd_indicators = ['SSD', 'SOLID STATE', 'FLASH', 'SAMSUNG SSD', 'CRUCIAL MX', 
+                             'KINGSTON SA', 'WD BLUE', 'INTEL SSD', 'ADATA SU']
+            
+            is_ssd = (
+                'SSD' in full_model_info or 
+                'SOLID STATE' in full_model_info or
+                media_type == 'SSD' or
+                any(indicator in full_model_info for indicator in ssd_indicators) or
+                self._is_known_ssd_model(full_model_info)
+            )
+            
+            if is_ssd:
+                # Better form factor detection for SSDs
+                if any(indicator in full_model_info for indicator in ['M.2', 'M2', 'NGFF']):
+                    return "M.2 SATA"
+                elif any(indicator in full_model_info for indicator in ['MSATA', 'mSATA']):
+                    return "mSATA"
+                elif interface in ['SATA', 'IDE', 'ATA']:
+                    return "SATA"
+                else:
+                    # Unknown interface but it's an SSD - make educated guess
+                    size_gb = int(disk.Size) / (1024**3) if disk.Size else 0
+                    if size_gb <= 128:  # Small drives often mSATA/M.2
+                        return "M.2 SATA"
+                    else:
+                        return "SATA"
+            else:
+                # Traditional spinning drive indicators
+                hdd_indicators = ['WD', 'WESTERN DIGITAL', 'SEAGATE', 'TOSHIBA', 'HITACHI', 
+                                 'HGST', 'BARRACUDA', 'BLUE', 'BLACK', 'RED']
+                
+                # If no SSD indicators and has HDD indicators, or interface suggests mechanical
+                if (any(indicator in full_model_info for indicator in hdd_indicators) or
+                    interface in ['IDE', 'SATA'] and not is_ssd):
+                    return "HDD"
+                
+                # Default fallback
+                return "HDD"
+                
+        except Exception as e:
+            log.warning(f"Error determining Windows drive type: {e}")
+            # Safer fallback logic
+            if hasattr(disk, 'Model') and disk.Model:
+                model_upper = disk.Model.upper()
+                if 'NVME' in model_upper or 'NVM' in model_upper:
+                    return "M.2 NVMe"
+                elif 'SSD' in model_upper:
+                    return "SATA"
+            return "HDD"
+
+    def _get_linux_storage_info(self):
+        """Get Linux storage information with drive type detection."""
+        # First, try to find the primary storage device
+        primary_device = None
+        largest_size = 0
+        
+        # Method 1: Use lsblk to get block devices
+        try:
+            output = _run_command(['lsblk', '-J', '-o', 'NAME,SIZE,TYPE,ROTA,TRAN'])
+            if output:
+                data = json.loads(output)
+                for device in data.get('blockdevices', []):
+                    if device.get('type') == 'disk':
+                        size_str = device.get('size', '0B')
+                        # Parse size (e.g., "500G", "1T")
+                        size_bytes = self._parse_linux_size(size_str)
+                        if size_bytes > largest_size:
+                            largest_size = size_bytes
+                            primary_device = device
+        except Exception as e:
+            log.warning(f"lsblk JSON parsing failed: {e}")
+        
+        # Method 2: Fallback to basic lsblk
+        if not primary_device:
+            try:
+                output = _run_command(['lsblk', '-d', '-o', 'NAME,SIZE,ROTA,TRAN'])
+                if output:
+                    lines = output.strip().split('\n')[1:]  # Skip header
+                    for line in lines:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            device_name = parts[0]
+                            size_str = parts[1]
+                            size_bytes = self._parse_linux_size(size_str)
+                            if size_bytes > largest_size:
+                                largest_size = size_bytes
+                                rota = parts[2] if len(parts) > 2 else '1'
+                                tran = parts[3] if len(parts) > 3 else ''
+                                primary_device = {
+                                    'name': device_name,
+                                    'size': size_str,
+                                    'rota': rota,
+                                    'tran': tran
+                                }
+            except Exception as e:
+                log.warning(f"Basic lsblk failed: {e}")
+        
+        if not primary_device:
+            return "Unknown"
+        
+        # Calculate size
+        actual_gib = largest_size / (1024**3)
+        rounded_gb = _round_storage_gb(actual_gib)
+        
+        # Determine drive type
+        drive_type = self._determine_linux_drive_type(primary_device)
+        
+        return f"{drive_type} {rounded_gb} GB"
+
+    def _determine_linux_drive_type(self, device):
+        """Determine the type of Linux drive (HDD, SSD, M.2 NVMe, M.2 SATA, mSATA)."""
+        try:
+            device_name = device.get('name', '')
+            transport = device.get('tran', '').lower()
+            rotational = device.get('rota', '1') == '1'
+            
+            # Check for NVMe drives (they appear as nvme* devices)
+            if device_name.startswith('nvme') or transport == 'nvme':
+                return "M.2 NVMe"
+            
+            # If it's rotational, it's definitely an HDD
+            if rotational:
+                return "HDD"
+            
+            # Non-rotational drive (SSD) - determine interface type
+            if transport in ['sata', 'ata']:
+                # Try to determine if it's M.2 SATA or regular SATA
+                # Check device path for clues
+                try:
+                    with open(f'/sys/block/{device_name}/device/model', 'r') as f:
+                        model = f.read().strip().upper()
+                        if 'M.2' in model or 'M2' in model:
+                            return "M.2 SATA"
+                        elif 'MSATA' in model:
+                            return "mSATA"
+                except:
+                    pass
+                
+                # Check form factor through other means
+                try:
+                    # Check if device is in a specific slot type
+                    device_path = f'/sys/block/{device_name}/device'
+                    if os.path.exists(device_path):
+                        # Look for PCI subsystem info that might indicate M.2
+                        subsystem_path = os.path.join(device_path, 'subsystem')
+                        if os.path.exists(subsystem_path):
+                            subsystem = os.readlink(subsystem_path)
+                            if 'pci' in subsystem.lower():
+                                # Modern SATA SSDs connected via PCIe are often M.2
+                                return "M.2 SATA"
+                except:
+                    pass
+                
+                return "SATA"
+            
+            elif transport == 'usb':
+                return "SATA"  # USB-connected drives are typically SATA-based
+            
+            else:
+                # Unknown transport, but it's an SSD
+                return "SATA"  # Default assumption
+                
+        except Exception as e:
+            log.warning(f"Error determining Linux drive type: {e}")
+            return "SATA"
+
+    def _parse_linux_size(self, size_str):
+        """Parse Linux size string (e.g., '500G', '1.5T') to bytes."""
+        try:
+            size_str = size_str.strip().upper()
+            if size_str.endswith('B'):
+                size_str = size_str[:-1]
+            
+            multipliers = {
+                'K': 1024,
+                'M': 1024**2,
+                'G': 1024**3,
+                'T': 1024**4,
+                'P': 1024**5
+            }
+            
+            for suffix, multiplier in multipliers.items():
+                if size_str.endswith(suffix):
+                    number = float(size_str[:-1])
+                    return int(number * multiplier)
+            
+            # No suffix, assume bytes
+            return int(float(size_str))
+            
+        except (ValueError, TypeError):
+            return 0
+
+    def _is_known_ssd_model(self, model):
+        """Check if the model name indicates a known SSD manufacturer/series."""
+        ssd_indicators = [
+            'SAMSUNG SSD', 'CRUCIAL', 'KINGSTON', 'SANDISK', 'INTEL SSD',
+            'WD ', 'WESTERN DIGITAL', 'CORSAIR', 'ADATA', 'TRANSCEND',
+            'MUSHKIN', 'OCZ', 'PATRIOT', 'PLEXTOR', 'TOSHIBA SSD',
+            'LITEON', 'SK HYNIX', 'MICRON'
+        ]
+        
+        model_upper = model.upper()
+        return any(indicator in model_upper for indicator in ssd_indicators)
 
     def get_battery_health(self):
         """Get battery health, trying WMI first, then falling back to powercfg."""

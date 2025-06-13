@@ -11,9 +11,8 @@ import json
 import sys
 import webbrowser
 import csv
-
 # Version Management
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.9.1"
 
 # Add PIL import for image handling
 try:
@@ -204,6 +203,8 @@ class AboutDialog(tk.Toplevel):
         self._create_link(links_frame, "Developer Profile", "https://pronouns.page/@Liforra")
         self._create_link(links_frame, "Source Code", "https://gitea.liforra.de/liforra/glpi-tui")
         self._create_link(links_frame, "Report Issues", "https://gitea.liforra.de/liforra/glpi-tui/issues")
+        # --- ADDED THIS LINE ---
+        self._create_link(links_frame, "View License (AGPL v3.0)", "https://www.gnu.org/licenses/agpl-3.0.html")
 
         # Description
         desc_label = tk.Label(
@@ -220,7 +221,7 @@ class AboutDialog(tk.Toplevel):
         close_btn.pack()
 
         # Center the dialog
-        self.geometry("400x350")
+        self.geometry("400x380") # Increased height slightly for the new link
         self.transient(parent)
         self.update_idletasks()
         x = (self.winfo_screenwidth() // 2) - (self.winfo_width() // 2)
@@ -1057,6 +1058,11 @@ class AddComputerFrame(ttk.Frame):
 
         data = self._get_form_data()
         data["tech_user"] = self.username
+        
+        # Add the German comment as required by the updated GLPI library
+        hostname = os.popen('hostname').read().strip() or 'UNBEKANNTES GERÄT'
+        data["comment"] = (f"\r\nDieses Rechengerät wurde automagisch von dem GLPI Client Version {APP_VERSION} hinzugefügt."
+                        f"\r\nDer Verantwortliche Nutzer ist {self.username} durch den Computer {hostname}")
 
         self._update_status("Validating hardware components...", "orange", show_progress=True)
 
@@ -1071,7 +1077,7 @@ class AddComputerFrame(ttk.Frame):
         }
         
         threading.Thread(target=self._validate_components_thread, args=(component_checks, data), daemon=True).start()
-
+    
     def _validate_components_thread(self, component_checks, data):
         """Validate components in background thread"""
         try:
