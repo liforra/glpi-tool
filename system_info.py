@@ -659,6 +659,7 @@ class SystemInfoGatherer:
     def get_ram_info(self):
         total_gb = 0
         ram_type = ""
+        modules = []
         
         if self.system == "Windows" and WMI_AVAILABLE:
             try:
@@ -670,11 +671,37 @@ class SystemInfoGatherer:
                 total_bytes = sum(int(mem.Capacity) for mem in memory_modules if mem.Capacity)
                 total_gb = round(total_bytes / (1024**3))
                 
-                # Get memory type from the first available module
                 mem_types = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5"}
+                form_map = {8: "DIMM", 12: "SO-DIMM"}
                 for mem in memory_modules:
+                    size_gb = 0
+                    try:
+                        if mem.Capacity:
+                            size_gb = round(int(mem.Capacity) / (1024**3))
+                    except Exception:
+                        pass
+                    mtype = None
                     if mem.MemoryType and mem.MemoryType in mem_types:
-                        ram_type = mem_types[mem.MemoryType]
+                        mtype = mem_types[mem.MemoryType]
+                    speed = None
+                    try:
+                        if getattr(mem, 'Speed', None):
+                            speed = int(mem.Speed)
+                        elif getattr(mem, 'ConfiguredClockSpeed', None):
+                            speed = int(mem.ConfiguredClockSpeed)
+                    except Exception:
+                        speed = None
+                    form = None
+                    try:
+                        ff = getattr(mem, 'FormFactor', None)
+                        if ff in form_map:
+                            form = form_map[ff]
+                    except Exception:
+                        form = None
+                    modules.append({"size": size_gb, "type": mtype, "speed": speed, "form": form})
+                for m in modules:
+                    if m.get("type"):
+                        ram_type = m["type"]
                         break
                 
                 # If WMI doesn't provide type, try to get it from manufacturer/part number
@@ -708,8 +735,6 @@ class SystemInfoGatherer:
             if output:
                 total_gb_calc = 0
                 memory_types = []
-                
-                # Parse dmidecode output more carefully
                 current_module = {}
                 for line in output.splitlines():
                     line = line.strip()
@@ -719,6 +744,7 @@ class SystemInfoGatherer:
                         if current_module.get('size') and current_module.get('type'):
                             memory_types.append(current_module['type'])
                             total_gb_calc += current_module['size']
+                            modules.append(current_module)
                         current_module = {}
                         
                     elif "Size:" in line and "No Module Installed" not in line and "Unknown" not in line:
@@ -741,11 +767,27 @@ class SystemInfoGatherer:
                             # Clean up the memory type
                             if mem_type and mem_type != "Unknown" and mem_type != "<OUT OF SPEC>":
                                 current_module['type'] = mem_type
+                    elif "Form Factor:" in line:
+                        ff = line.split(":", 1)[1].strip().upper()
+                        if ff:
+                            if "SODIMM" in ff or "SO-DIMM" in ff:
+                                current_module['form'] = "SO-DIMM"
+                            elif "DIMM" in ff:
+                                current_module['form'] = "DIMM"
+                    elif "Speed:" in line or "Configured Clock Speed:" in line:
+                        sp = line.split(":", 1)[1]
+                        digits = ''.join(ch for ch in sp if ch.isdigit())
+                        if digits:
+                            try:
+                                current_module['speed'] = int(digits)
+                            except Exception:
+                                pass
                 
                 # Process the last module
                 if current_module.get('size') and current_module.get('type'):
                     memory_types.append(current_module['type'])
                     total_gb_calc += current_module['size']
+                    modules.append(current_module)
                 
                 total_gb = round(total_gb_calc)
                 
@@ -775,21 +817,32 @@ class SystemInfoGatherer:
                 except:
                     pass
 
-        # Format the result
+        if modules:
+            best = None
+            for m in modules:
+                if m.get("size") and m.get("type"):
+                    best = m
+                    break
+            if not best:
+                best = modules[0]
+            size_int = int(round(best.get("size") or total_gb or 0))
+            t = best.get("type") or ram_type or ""
+            f = best.get("form") or ("SO-DIMM" if self.system == "Windows" else "DIMM")
+            s = best.get("speed")
+            if t and size_int > 0:
+                if s:
+                    return f"{f} {t} {size_int}GB {s}MHz"
+                return f"{f} {t} {size_int}GB"
         if total_gb > 0:
             if ram_type:
                 return f"{ram_type} {total_gb} GB"
+            if total_gb >= 32:
+                return f"DDR4 {total_gb} GB"
+            elif total_gb >= 8:
+                return f"DDR4 {total_gb} GB"
             else:
-                # If we couldn't determine the DDR type, make an educated guess based on system age
-                # This is a fallback - modern systems are likely DDR4 or DDR5
-                if total_gb >= 32:
-                    return f"DDR4 {total_gb} GB"  # High capacity suggests modern DDR4/5
-                elif total_gb >= 8:
-                    return f"DDR4 {total_gb} GB"  # Common DDR4 range
-                else:
-                    return f"DDR3 {total_gb} GB"  # Older/lower capacity systems
-        else:
-            return "Unknown"
+                return f"DDR3 {total_gb} GB"
+        return "Unknown"
 
     def get_storage_info(self):
         """Get storage information with drive type detection (HDD, SSD, M.2 NVMe, M.2 SATA, mSATA)."""

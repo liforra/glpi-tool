@@ -86,7 +86,11 @@ class ConfigManager:
                 "password": "",
             },
             "glpi": {
-                "app_token": "PLEASE_REPLACE_IN_CONFIG_FILE",
+                "glpi_url": "https://example.com/glpi",
+                "api_version": "v2",
+                "client_id": "PLEASE_REPLACE",
+                "client_secret": "PLEASE_REPLACE",
+                "scope": "api",
                 "verify_ssl": True,
                 "timeout": 10,
                 "default_location": "Akademie",
@@ -946,7 +950,7 @@ class AddComputerFrame(ttk.Frame):
     
     def gather_system_info(self):
         self._update_status("Starting system information gathering...", "orange", show_progress=True)
-        self.config(cursor="wait")
+        self.config(cursor="watch")
         threading.Thread(target=self._gather_system_info_thread, daemon=True).start()
     
     def _gather_system_info_thread(self):
@@ -1090,7 +1094,7 @@ class AddComputerFrame(ttk.Frame):
                     checked_count += 1
                     self.after(0, self._update_status, f"Checking {label}... ({checked_count}/{total_checks})", "orange", True)
                     
-                    result = glpi.getId(itemtype, value)
+                    result = self.controller.glpi_client.getId(itemtype, value)
                     if result in (None, 1403, 1404):
                         missing[label] = value
             
@@ -1128,7 +1132,7 @@ class AddComputerFrame(ttk.Frame):
     def _add_computer_thread(self, data):
         """Add computer in background thread"""
         try:
-            computer_id = glpi.add("Computer", data)
+            computer_id = self.controller.glpi_client.add("Computer", data)
             self.after(0, self._handle_add_result, computer_id, data.get("name", "Unknown"))
         except Exception as e:
             self.after(0, self._handle_add_error, str(e))
@@ -1166,7 +1170,7 @@ class AddComputerFrame(ttk.Frame):
             return
         
         try:
-            base_url = glpi.api_url.replace("/apirest.php", "")
+            base_url = self.controller.glpi_client.glpi_url.replace("/apirest.php", "")
             computer_url = f"{base_url}/front/computer.form.php?id={self.last_added_computer_id}"
             
             logging.info(f"Opening computer {self.last_added_computer_id} in browser: {computer_url}")
@@ -1246,7 +1250,7 @@ class SearchFrame(ttk.Frame):
         
         self._update_status(f"Starting search for '{query}'...", "orange", show_progress=True)
         
-        self.results_text.config(state="normal", cursor="wait")
+        self.results_text.config(state="normal", cursor="watch")
         self.results_text.delete("1.0", tk.END)
         self.update_idletasks()
 
@@ -1254,32 +1258,22 @@ class SearchFrame(ttk.Frame):
 
     def _search_thread(self, query):
         try:
-            # Step 1: Validate session
-            self.after(0, self._update_status, "Validating session...", "orange", True)
-            if not hasattr(glpi, 'session_token') or not glpi.session_token:
-                self.after(0, self._handle_search_error, "Session expired. Please logout and login again.")
-                return
-            
-            # Step 2: Send request
+            # The new client handles session tokens internally.
             self.after(0, self._update_status, "Sending search request to GLPI...", "orange", True)
-            result_str = glpi.search("serial", query)
+            result_json = self.controller.glpi_client.search_computer(query)
             
-            # Step 3: Process response
             self.after(0, self._update_status, "Received response, processing results...", "orange", True)
-            try:
-                result_json = json.loads(result_str)
-                formatted_result = json.dumps(result_json, indent=2)
-                
-                # Count results
-                result_count = 0
-                if isinstance(result_json, dict) and "totalcount" in result_json:
-                    result_count = result_json["totalcount"]
-                elif isinstance(result_json, list):
-                    result_count = len(result_json)
-                
-                self.after(0, self._handle_search_success, formatted_result, query, result_count)
-            except json.JSONDecodeError:
-                self.after(0, self._handle_search_success, result_str, query, "unknown")
+            
+            formatted_result = json.dumps(result_json, indent=2)
+            
+            # Count results
+            result_count = 0
+            if isinstance(result_json, dict) and "totalcount" in result_json:
+                result_count = result_json["totalcount"]
+            elif isinstance(result_json, list):
+                result_count = len(result_json)
+            
+            self.after(0, self._handle_search_success, formatted_result, query, result_count)
                 
         except Exception as e:
             error_msg = f"An error occurred:\n{str(e)}"
@@ -1373,11 +1367,11 @@ class GLPIGUIApp(tk.Tk):
         self.setup_logging()
         
         try:
-            app_token = self.config_manager.config["glpi"]["app_token"]
-            glpi.init_glpi(app_token)
+            # Create an instance of the GLPIClient
+            self.glpi_client = glpi.GLPIClient(self.config_manager.config)
         except (ValueError, KeyError) as e:
-            logging.critical(f"CRITICAL ERROR: {e}")
-            messagebox.showerror("Configuration Error", str(e))
+            logging.critical(f"CRITICAL ERROR in config: {e}")
+            messagebox.showerror("Configuration Error", f"There is a critical error in your glpi_config.toml file: {e}")
             self.after(100, self.destroy)
             return
 
@@ -1445,7 +1439,8 @@ class GLPIGUIApp(tk.Tk):
     def check_session_and_start(self):
         if self.config_manager.config["authentication"]["remember_session"] and self.config_manager.is_session_valid():
             session = self.config_manager.config["session"]
-            if glpi.restore_session(session["token"], session["username"]):
+            if self.glpi_client.verify_session(session["token"]):
+                self.glpi_client.username = session["username"]
                 self.on_login_success(session["token"], session["username"], False)
             else:
                 self.show_login_frame()
@@ -1463,25 +1458,33 @@ class GLPIGUIApp(tk.Tk):
             status_label.config(text="Username and password are required")
             return
         
-        self.config(cursor="wait")
+        logging.info(f"Attempting to login user: {username}")
+        self.config(cursor="watch")
         status_label.config(text="Authenticating...")
         
+        # Update SSL verification in the client if it has changed in the UI
+        if self.glpi_client.verify_ssl != verify_ssl:
+            self.glpi_client.verify_ssl = verify_ssl
+            logging.info(f"SSL verification updated to: {verify_ssl}")
+
         def _authenticate():
             try:
-                result = glpi.auth(username, password, verify_ssl, remember)
-                self.after(0, self._handle_auth_result, result, username, remember, status_label)
+                success, result = self.glpi_client.init_session(username, password)
+                self.after(0, self._handle_auth_result, success, result, username, remember, status_label)
             except Exception as e:
                 self.after(0, self._handle_auth_error, str(e), status_label)
 
         threading.Thread(target=_authenticate, daemon=True).start()
 
-    def _handle_auth_result(self, result, username, remember, status_label):
+    def _handle_auth_result(self, success, result, username, remember, status_label):
             self.config(cursor="")
-            if isinstance(result, list) and len(result) >= 1:
-                self.on_login_success(result[0], username, remember)
+            if success:
+                logging.info(f"Successfully authenticated user: {username}")
+                self.on_login_success(result, username, remember)
             else:
-                messages = {1401: "Invalid username or password", 1400: "Authentication failed"}
-                status_label.config(text=messages.get(result, f"Failed (Code: {result})"))
+                error_message = result if isinstance(result, str) else "Authentication failed"
+                logging.error(f"Authentication failed for user {username}: {error_message}")
+                status_label.config(text=error_message)
 
     def _handle_auth_error(self, error, status_label):
         self.config(cursor="")
@@ -1502,9 +1505,10 @@ class GLPIGUIApp(tk.Tk):
 
     def cleanup_session(self):
         try: 
-            glpi.killsession()
-        except: 
-            pass
+            if self.glpi_client:
+                self.glpi_client.kill_session()
+        except Exception as e:
+            logging.warning(f"Failed to clean up GLPI session: {e}")
         self.config_manager.clear_session()
 
     def cleanup(self):
