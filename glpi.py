@@ -599,6 +599,28 @@ class GLPIClient:
             log.error(f'v1 fallback setup failed for {itemtype} "{query}": {e}')
             return 1404
 
+    def _link_component_v1(self, device_id, component_itemtype, component_id):
+        """Fallback to v1 API for linking components."""
+        log.warning(f"Using v1 API to link {component_itemtype} to device {device_id}")
+        try:
+            # Temporarily switch to v1 API for this call
+            original_api_version = self.api_version
+            self.api_version = "v1"
+
+            endpoint = f"/Item_{component_itemtype}"
+            item_payload = {
+                'items_id': device_id,
+                'itemtype': 'Computer',
+                f'{component_itemtype.lower()}s_id': component_id
+            }
+            payload = {'input': item_payload}
+            self._send_request(endpoint, method="POST", payload=payload)
+        except Exception as e:
+            log.error(f"v1 component linking failed: {e}")
+        finally:
+            # Always restore original API version
+            self.api_version = original_api_version
+
     def addToItemtype(self, device_id, data):
         # 1. Handle Hardware Components
         hardware_components = ["cpu", "processor", "gpu", "ram", "hdd"]
@@ -635,7 +657,19 @@ class GLPIClient:
                             try:
                                 self._send_request(f"/Assets/Computer/{device_id}", method="PATCH", payload=payload)
                             except Exception as e:
-                                log.warning(f"v2 component linking failed for {component}: {e}")
+                                log.warning(f"v2 component linking failed for {component}: {e}, falling back to v1")
+                                component_itemtype = None
+                                if component in ("processor", "cpu"):
+                                    component_itemtype = "DeviceProcessor"
+                                elif component == "gpu":
+                                    component_itemtype = "DeviceGraphicCard"
+                                elif component == "ram":
+                                    component_itemtype = "DeviceMemory"
+                                elif component == "hdd":
+                                    component_itemtype = "DeviceHardDrive"
+                                
+                                if component_itemtype:
+                                    self._link_component_v1(device_id, component_itemtype, component_id)
                 else:
                     # v1 API component linking
                     item_payload = {'items_id': device_id, 'itemtype': 'Computer'}

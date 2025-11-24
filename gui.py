@@ -932,9 +932,75 @@ class AddComputerFrame(ttk.Frame):
             ttk.Label(parent, text=f"{label_text}:").grid(row=i, column=0, sticky=tk.W, pady=5, padx=5)
             var = tk.StringVar()
             variables[data_key] = var
-            ttk.Entry(parent, textvariable=var).grid(row=i, column=1, pady=5, padx=5, sticky=tk.EW)
+            
+            entry = ttk.Entry(parent, textvariable=var)
+            entry.grid(row=i, column=1, pady=5, padx=5, sticky=tk.EW)
+            
+            # Add filtering for specific fields
+            if data_key in ['model', 'manufacturer', 'processor']:
+                entry.bind('<KeyRelease>', 
+                    lambda e, k=data_key: self._on_filter_keyrelease(e, k))
+                
         parent.grid_columnconfigure(1, weight=1)
         return variables
+        
+    def _on_filter_keyrelease(self, event, field_key):
+        """Handle key release events for filterable fields"""
+        if event.keysym in ('BackSpace', 'Delete', 'Return'):
+            return
+            
+        # Get the current entry widget and its value
+        entry = event.widget
+        current_value = entry.get()
+        
+        if len(current_value) < 2:  # Don't search for single characters
+            return
+            
+        # Map field key to GLPI item type
+        item_type_map = {
+            'model': 'ComputerModel',
+            'manufacturer': 'Manufacturer',
+            'processor': 'DeviceProcessor'
+        }
+        
+        item_type = item_type_map.get(field_key)
+        if not item_type:
+            return
+            
+        # Use after to avoid blocking the UI
+        self.after(300, self._perform_search, entry, item_type, current_value)
+    
+    def _perform_search(self, entry_widget, item_type, search_term):
+        """Perform the actual search and update the entry if needed"""
+        try:
+            # Get matching items from GLPI
+            results = self.controller.glpi_client.search(
+                itemtype=item_type,
+                criteria={"query": search_term, "limit": 5}  # Limit to 5 results
+            )
+            
+            if not results or not search_term:
+                return
+                
+            # Extract the best match
+            if item_type in ["DeviceProcessor", "DeviceGraphicCard", "DeviceMemory", "DeviceHardDrive"]:
+                best_match = next((item.get("designation", "") for item in results if item.get("designation")), "")
+            else:
+                best_match = next((item.get("name", "") for item in results if item.get("name")), "")
+            
+            # If we have a match that starts with the search term, auto-complete it
+            if best_match.lower().startswith(search_term.lower()):
+                # Save cursor position
+                cursor_pos = entry_widget.index(tk.INSERT)
+                # Update the entry with the best match
+                entry_widget.delete(0, tk.END)
+                entry_widget.insert(0, best_match)
+                # Highlight the part that was auto-completed
+                entry_widget.selection_range(len(search_term), tk.END)
+                entry_widget.icursor(cursor_pos)  # Restore cursor position
+                
+        except Exception as e:
+            logging.error(f"Error searching for {item_type}: {e}")
 
     def _update_status(self, message, color="black", show_progress=False):
         """Update the status message with optional progress indicator"""
