@@ -88,53 +88,224 @@ def _clean_processor_name(name):
     return name.strip()
 
 def _clean_gpu_name(name):
-    """Extracts the core model name from a full GPU brand string."""
-    if not name: 
+    """Extracts the core model name from a full GPU brand string, based on common patterns."""
+    if not name:
         return "Unknown"
-    
-    # Remove common prefixes and suffixes
+
+    # Normalize the name by removing trademarks and standardizing whitespace
     cleaned_name = re.sub(r'\((R|TM)\)', '', name).strip()
-    cleaned_name = re.sub(r'\s+', ' ', cleaned_name)  # Normalize whitespace
-    
-    # Remove manufacturer prefixes but keep the important part
-    prefixes_to_remove = [
-        "NVIDIA ", "AMD ", "Intel\\(R\\) ", "Intel ", 
-        "Advanced Micro Devices, Inc\\. ", "Corporation "
+    cleaned_name = re.sub(r'\s+', ' ', cleaned_name)
+
+    # List of regex patterns to extract the core GPU name.
+    # Order is important: from more specific to more general.
+    patterns = [
+        # NVIDIA Specific
+        re.compile(r'(NVS\s+\d+\s*\w*)', re.IGNORECASE),
+        re.compile(r'(Quadro\s+[\w\s]+\d{3,})', re.IGNORECASE),
+        re.compile(r'(GeForce\s+(?:RTX|GTX|GT)\s+[\d\s\w-]+)', re.IGNORECASE),
+        
+        # AMD/ATI Specific - handles "Radeon HD 7970", "Radeon R9 290", "Radeon RX 580"
+        re.compile(r'(Radeon\s+(?:HD|R\d|RX)\s+[\d\s\w]+)', re.IGNORECASE),
+        # Handles "Radeon Vega 8"
+        re.compile(r'(Radeon\s+Vega\s+\d+)', re.IGNORECASE),
+        # Handles "Radeon 680M"
+        re.compile(r'(Radeon\s+\d{3,4}M)', re.IGNORECASE),
+        
+        # Intel Specific
+        re.compile(r'(Iris\s+(?:Xe|Pro|Plus)[\s\w()]+)', re.IGNORECASE),
+        re.compile(r'(Intel\s+(?:UHD|HD)\s+Graphics\s*[\w\d]*)', re.IGNORECASE),
+        re.compile(r'(Intel\s+GMA\s+[\w\d]+)', re.IGNORECASE),
+
+        # Generic Radeon/GeForce/Quadro catch-alls for anything missed
+        re.compile(r'(Radeon\s+[\w\d\s]+)', re.IGNORECASE),
+        re.compile(r'(GeForce\s+[\w\d\s]+)', re.IGNORECASE),
+        re.compile(r'(Quadro\s+[\w\d\s]+)', re.IGNORECASE),
+
+        # APU Codenames from user list
+        re.compile(r'(Cezanne|Renoir)', re.IGNORECASE)
     ]
-    
-    for prefix in prefixes_to_remove:
-        cleaned_name = re.sub(f"^{prefix}", "", cleaned_name, flags=re.IGNORECASE)
-    
-    # Special handling for common GPU naming patterns
-    if "geforce" in cleaned_name.lower():
-        # Extract GeForce model (e.g., "GeForce GTX 1060" -> "GeForce GTX 1060")
-        match = re.search(r'(geforce\s+(?:gtx|rtx)?\s*\d+\w*)', cleaned_name, re.IGNORECASE)
+
+    for pattern in patterns:
+        match = pattern.search(cleaned_name)
         if match:
-            return match.group(1)
+            # Return the first match found, cleaned of extra whitespace
+            return match.group(0).strip()
+
+    # If no specific pattern matches, perform a generic cleanup by removing manufacturer prefixes.
+    generic_cleaned = re.sub(r'^(AMD|NVIDIA|Intel|ATI)[\s/]*', '', cleaned_name, flags=re.IGNORECASE)
+    generic_cleaned = re.sub(r' Corporation| Inc\.', '', generic_cleaned, flags=re.IGNORECASE)
     
-    if "radeon" in cleaned_name.lower():
-        # Extract Radeon model (e.g., "Radeon RX 580" -> "Radeon RX 580")
-        match = re.search(r'(radeon\s+(?:rx|r\d+)?\s*\d+\w*)', cleaned_name, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    
-    if "intel" in cleaned_name.lower() and ("hd" in cleaned_name.lower() or "uhd" in cleaned_name.lower() or "iris" in cleaned_name.lower()):
-        # Extract Intel integrated graphics (e.g., "Intel HD Graphics 620" -> "Intel HD Graphics 620")
-        match = re.search(r'(intel\s+(?:hd|uhd|iris)\s+graphics\s*\d*)', cleaned_name, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    
-    return cleaned_name.strip() if cleaned_name.strip() else name
+    return generic_cleaned.strip() if generic_cleaned.strip() else name
 
 def _clean_manufacturer_name(name):
-    """Removes common corporate suffixes from a manufacturer name."""
-    if not name: return "Unknown"
-    # List of suffixes to remove, case-insensitive.
-    # The regex looks for these words at the end of the string, preceded by optional space/comma.
-    suffixes = ["Inc", "Corporation", "Corp", "Limited", "Ltd", "Company"]
-    pattern = r'[\s,]*(' + '|'.join(suffixes) + r')\.?$'
-    cleaned_name = re.sub(pattern, '', name, flags=re.IGNORECASE)
-    return cleaned_name.strip()
+    """
+    Cleans and standardizes the manufacturer name against a known list.
+    """
+    if not name:
+        return "Unknown"
+
+    MANUFACTURER_MAP = {
+        "HPE (Hewlett Packard Enterprise)": ["hewlett packard enterprise", "hpe"],
+        "HP": ["hewlett-packard", "hewlett packard", "hp"],
+        "ASRock": ["asrock"],
+        "Asus": ["asus", "asustek"],
+        "Dell EMC": ["dell emc"],
+        "Dell": ["dell"],
+        "Gigabyte": ["gigabyte", "gigabyte technology"],
+        "MSI": ["msi", "micro-star"],
+        "Supermicro": ["supermicro", "super micro"],
+        "Wortmann (TERRA)": ["wortmann"],
+        "TUXEDO Computers": ["tuxedo"],
+        "Schenker / XMG": ["schenker", "xmg"],
+        "SilentiumPC (Endorfy)": ["silentiumpc"],
+        "Alpenföhn (EKL)": ["alpenföhn"],
+        "Acronis": ["acronis"], "ABUS": ["abus"], "Acer": ["acer"], "ADATA": ["adata"],
+        "Adesso": ["adesso"], "AG Neovo": ["ag neovo"], "Alcatel-Lucent Enterprise": ["alcatel-lucent"],
+        "Allied Telesis": ["allied telesis"], "AMD": ["amd", "advanced micro devices"], "AOC": ["aoc"],
+        "APC (Schneider Electric)": ["apc", "american power conversion"], "Aqua Computer": ["aqua computer"],
+        "Arista": ["arista"], "Aruba (HPE)": ["aruba"], "Audio-Technica": ["audio-technica"],
+        "Aten": ["aten"], "AVM (FRITZ!)": ["avm"], "Bachmann": ["bachmann"], "baramundi": ["baramundi"],
+        "Barco": ["barco"], "be quiet!": ["be quiet"], "Belinea": ["belinea"], "BenQ": ["benq"],
+        "beyerdynamic": ["beyerdynamic"], "Bitdefender": ["bitdefender"], "bluechip": ["bluechip"],
+        "Bosch": ["bosch"], "Brennenstuhl": ["brennenstuhl"], "Brother": ["brother"], "Canon": ["canon"],
+        "CHERRY": ["cherry"], "Cisco": ["cisco"], "Compulab": ["compulab"], "Cooler Master": ["cooler master"],
+        "Corsair": ["corsair"], "Crucial (Micron)": ["crucial"], "CSL-Computer": ["csl-computer"],
+        "D-Link": ["d-link"], "Da-Lite": ["da-lite"], "Datacolor": ["datacolor"], "Datalogic": ["datalogic"],
+        "Delock": ["delock"], "Develop": ["develop"], "devolo": ["devolo"], "Digitus (ASSMANN)": ["digitus"],
+        "DrayTek": ["draytek"], "Dynabook (Toshiba)": ["dynabook"], "DYMO": ["dymo"], "Eaton": ["eaton"],
+        "Eizo": ["eizo"], "Eminent": ["eminent"], "EPOS": ["epos"], "Epson": ["epson"], "ESET": ["eset"],
+        "EVGA": ["evga"], "Fairphone": ["fairphone"], "Fellowes": ["fellowes"], "Fortinet": ["fortinet"],
+        "Fractal Design": ["fractal design"], "Fujifilm": ["fujifilm"], "Fujitsu": ["fujitsu"],
+        "G DATA": ["g data"], "G.Skill": ["g.skill"], "Garmin": ["garmin"], "Gigaset": ["gigaset"],
+        "Goobay": ["goobay"], "GoodRAM": ["goodram"], "Google": ["google"], "GoPro": ["gopro"],
+        "Hama": ["hama"], "Hannspree": ["hannspree"], "Harting": ["harting"], "Homematic IP (eQ-3)": ["homematic ip"],
+        "HTC": ["htc"], "Huawei": ["huawei"], "HYRICAN": ["hyrican"], "HyperX": ["hyperx"],
+        "IBM": ["ibm", "international business machines"], "iFixit": ["ifixit"], "iiyama": ["iiyama"],
+        "InLine (INTOS)": ["inline"], "Insta360": ["insta360"], "Intenso": ["intenso"],
+        "Inter-Tech": ["inter-tech"], "Intel": ["intel"], "IOGEAR": ["iogear"], "iRobot": ["irobot"],
+        "Jabra": ["jabra"], "Jaybird": ["jaybird"], "JBL": ["jbl"], "Juniper": ["juniper"],
+        "Kaspersky": ["kaspersky"], "Kensington": ["kensington"], "Keychron": ["keychron"],
+        "Kingston": ["kingston"], "KIOXIA": ["kioxia"], "Konftel": ["konftel"], "Kyocera": ["kyocera"],
+        "Lacie (Seagate)": ["lacie"], "Lancom": ["lancom"], "Lenovo": ["lenovo"], "Lexar": ["lexar"],
+        "Lexmark": ["lexmark"], "LG": ["lg", "lg electronics"], "Lian Li": ["lian li"], "LINDY": ["lindy"],
+        "LogiLink": ["logilink"], "Logitech": ["logitech"], "M-Audio": ["m-audio"], "Matrox": ["matrox"],
+        "MediaTek": ["mediatek"], "MEDION": ["medion"], "Mevo": ["mevo"], "Microchip": ["microchip"],
+        "Microsoft": ["microsoft"], "MikroTik": ["mikrotik"], "Naim": ["naim"], "Ncase": ["ncase"],
+        "NEC": ["nec"], "NetApp": ["netapp"], "NFC": ["nfc"], "Nikon": ["nikon"], "NOCTUA": ["noctua"],
+        "Nokia": ["nokia"], "Nvidia": ["nvidia"], "Oculus (Meta)": ["oculus"], "OKI": ["oki"],
+        "Okuma": ["okuma"], "OnePlus": ["oneplus"], "Optoma": ["optoma"], "Orbi (Netgear)": ["orbi"],
+        "OWC (Other World Computing)": ["owc", "other world computing"], "Palo Alto Networks": ["palo alto networks"],
+        "Panduit": ["panduit"], "Patriot": ["patriot"], "Philips": ["philips"],
+        "Plantronics (Poly)": ["plantronics"], "PNY": ["pny"], "Poly (HP)": ["poly"],
+        "PowerWalker (BlueWalker)": ["powerwalker"], "QNAP": ["qnap"], "QPAD": ["qpad"],
+        "Qualcomm": ["qualcomm"], "Raspberry Pi": ["raspberry pi"], "Razer": ["razer"],
+        "Realtek": ["realtek"], "Ricoh": ["ricoh"], "Ring": ["ring"], "Rittal": ["rittal"],
+        "Roland": ["roland"], "Sabrent": ["sabrent"], "Samsung": ["samsung"],
+        "SanDisk (Western Digital)": ["sandisk"], "Seagate": ["seagate"], "Seasonic": ["seasonic"],
+        "Sennheiser": ["sennheiser"], "Sharkoon": ["sharkoon"], "Sharp/NEC": ["sharp"],
+        "Shelly": ["shelly"], "Shure": ["shure"], "Siemens": ["siemens"], "SilverStone": ["silverstone"],
+        "SK hynix": ["sk hynix", "hynix"], "Snom": ["snom"], "Sophos": ["sophos"], "Sony": ["sony"],
+        "StarTech": ["startech"], "SteelSeries": ["steelseries"], "Synology": ["synology"],
+        "TA Triumph-Adler": ["ta triumph-adler"], "tado°": ["tado"], "Targus": ["targus"], "TCL": ["tcl"],
+        "TeamGroup": ["teamgroup"], "TeamViewer": ["teamviewer"], "TerraMaster": ["terramaster"],
+        "Teufel": ["teufel"], "Thermaltake": ["thermaltake"], "Thrustmaster": ["thrustmaster"],
+        "TP-Link": ["tp-link"], "Transcend": ["transcend"], "Trend Micro": ["trend micro"],
+        "Tripp Lite (Eaton)": ["tripp lite"], "Triton": ["triton"], "Ubiquiti": ["ubiquiti"],
+        "Unifi (Ubiquiti)": ["unifi"], "UTAX": ["utax"], "Valueline": ["valueline"], "Veeam": ["veeam"],
+        "Verbatism": ["verbatism"], "Veritas": ["veritas"], "ViewSonic": ["viewsonic"],
+        "Vivitek": ["vivitek"], "Wacom": ["wacom"], "WatchGuard": ["watchguard"],
+        "Western Digital": ["western digital", "wd"], "Wyze": ["wyze"], "Xerox": ["xerox"],
+        "XFX": ["xfx"], "Yealink": ["yealink"], "Yi Technology": ["yi technology"], "Zebra": ["zebra"],
+        "Zyxel": ["zyxel"],
+    }
+    
+    lower_name = name.lower()
+    lower_name = re.sub(r'[\s,]* (inc|corporation|corp|ltd|gmbh|computer)[\.]?$', '', lower_name).strip()
+
+    for canonical, aliases in MANUFACTURER_MAP.items():
+        for alias in aliases:
+            if len(alias) <= 3:
+                if re.search(r'\b' + re.escape(alias) + r'\b', lower_name):
+                    return canonical
+            else:
+                if alias in lower_name:
+                    return canonical
+
+    return name.strip()
+
+def _standardize_os_name(raw_name):
+    if not raw_name: return "Unknown"
+    lower_raw_name = raw_name.lower()
+    OS_MAP = {
+        "Windows 11": ["windows 11", "win11"], "Windows 10": ["windows 10", "win10"],
+        "Windows 7": ["windows 7", "win7"], "Windows Server 2025": ["windows server 2025"],
+        "Windows Server 2022": ["windows server 2022"], "Windows Server 2019": ["windows server 2019"],
+        "Windows Server 2016": ["windows server 2016"], "Windows Server 2012 R2": ["windows server 2012 r2"],
+        "Windows Server 2008 R2": ["windows server 2008 r2"],
+        "Ubuntu Server LTS 22.04 / 24.04": ["ubuntu server 24.04", "ubuntu 24.04 lts", "ubuntu 22.04 lts", "ubuntu server 22.04"],
+        "Debian 12": ["debian 12"], "RHEL 8 / 9": ["rhel 9", "red hat enterprise linux 9", "rhel 8", "red hat enterprise linux 8"],
+        "SUSE SLES 15": ["suse sles 15", "sles 15"], "iOS 26": ["ios 26"], "iOS 18": ["ios 18"], "iOS 17": ["ios 17"],
+        "Android": ["android"], "VMware ESXi": ["vmware esxi", "esxi"], "Microsoft Hyper-V": ["microsoft hyper-v", "hyper-v"],
+        "Proxmox VE": ["proxmox ve", "proxmox"], "macOS": ["macos", "os x", "darwin"],
+        "Sonstige Embedded/CE": ["embedded", "ce", "iot core", "windows ce", "tizen", "webos", "routeros", "vyos"]
+    }
+    for canonical, keywords in OS_MAP.items():
+        for keyword in keywords:
+            if keyword in lower_raw_name:
+                return canonical
+    if "windows" in lower_raw_name: return "Windows"
+    if "linux" in lower_raw_name: return "Linux"
+    if "mac" in lower_raw_name: return "macOS"
+    return raw_name.strip()
+
+def _standardize_os_version(raw_version, os_name_hint=""):
+    if not raw_version: return "Unknown"
+    lower_raw_version = str(raw_version).lower()
+    lower_os_name = os_name_hint.lower()
+    if "windows" in lower_os_name:
+        for ver in ["25H2", "24H2", "23H2", "22H2", "21H2"]:
+            if ver.lower() in lower_raw_version: return ver
+        if "windows 11" in lower_os_name:
+            if "22621" in lower_raw_version: return "22H2"
+            if "22000" in lower_raw_version: return "21H2"
+        if "windows 10" in lower_os_name:
+            if "19045" in lower_raw_version: return "22H2"
+            if "19044" in lower_raw_version: return "21H2"
+        if "10" == lower_raw_version: return "10"
+        if "7" == lower_raw_version: return "7"
+    if "macos" in lower_os_name or "os x" in lower_os_name:
+        versions = {"High Sierra 10.13": ["10.13", "high sierra"], "Mojave 10.14": ["10.14", "mojave"],
+                    "Catalina 10.15": ["10.15", "catalina"], "Big Sur 11": ["11.", "big sur"],
+                    "Monterey 12": ["12.", "monterey"], "Ventura 13": ["13.", "ventura"],
+                    "Sonoma 14": ["14.", "sonoma"], "Sequoia 15": ["15.", "sequoia"]}
+        for name, keys in versions.items():
+            if any(key in lower_raw_version for key in keys): return name
+    if "android" in lower_os_name:
+        versions = {"16 Baklava": ["16", "baklava"], "15 Vanilla Ice Cream": ["15", "vanilla ice cream"],
+                    "14 Upside Down Cake": ["14", "upside down cake"], "13 Tiramisu": ["13", "tiramisu"],
+                    "12L Snow Cone": ["12l"], "12 Snow Cone": ["12", "snow cone"],
+                    "11 Red Velvet Cake": ["11", "red velvet cake"], "10 Quince Tart": ["10", "quince tart"],
+                    "9 Pie": ["9", "pie"], "8.1 Oreo": ["8.1"], "8.0 Oreo": ["8.0", "oreo"],
+                    "7.1 Nougat": ["7.1"], "7.0 Nougat": ["7.0", "nougat"], "6.0 Marshmallow": ["6.0", "marshmallow"],
+                    "5.1 Lollipop": ["5.1"], "5.0 Lollipop": ["5.0", "lollipop"], "4.4 KitKat": ["4.4", "kitkat"],
+                    "4.3 Jelly Bean": ["4.3"], "4.2 Jelly Bean": ["4.2"], "4.1 Jelly Bean": ["4.1"],
+                    "4.0 Ice Cream Sandwich": ["4.0", "ice cream sandwich"]}
+        for name, keys in versions.items():
+            if any(key in lower_raw_version for key in keys): return name
+    return raw_version.strip()
+
+def _standardize_os_edition(raw_edition, os_name_hint=""):
+    if not raw_edition: return "Unknown"
+    lower_raw_edition = raw_edition.lower()
+    if "pro for workstations" in lower_raw_edition: return "Pro for Workstations"
+    if "pro" in lower_raw_edition: return "Pro"
+    if "enterprise" in lower_raw_edition: return "Enterprise"
+    if "education" in lower_raw_edition: return "Education"
+    if "home" in lower_raw_edition: return "Home"
+    if "server" in lower_raw_edition: return "Server"
+    if "desktop" in lower_raw_edition: return "Desktop"
+    if "workstation" in lower_raw_edition: return "Workstation"
+    return raw_edition.strip()
 
 class SystemInfoGatherer:
     def __init__(self, status_callback=None):
@@ -1273,18 +1444,20 @@ class SystemInfoGatherer:
         self._update_status("Battery health could not be determined.")
         return None
 
+
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    """For testing purposes: gathers and prints all system info."""
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    def status_callback(message):
-        print(f"STATUS: {message}")
+    def print_status(message):
+        print(message)
     
-    print("Attempting to gather system info. If it fails, try running as Administrator/sudo.")
-    gatherer = SystemInfoGatherer(status_callback=status_callback)
-    info = gatherer.gather_all_info()
-    print("\n--- Cleaned System Information ---")
-    print(json.dumps(info, indent=2))
-    print("--------------------------------\n")
+    gatherer = SystemInfoGatherer(status_callback=print_status)
+    all_info = gatherer.gather_all_info()
+    
+    print("\n--- System Information Report ---")
+    print(json.dumps(all_info, indent=4))
+    print("---------------------------------")
 
 if __name__ == "__main__":
     main()
