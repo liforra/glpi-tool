@@ -68,10 +68,8 @@ class GLPIClient:
             success, token_or_message = self._init_session_v2(username, password)
         else:
             success, token_or_message = self._init_session_v1(username, password)
-            if success:
-                self.session_token = token_or_message
 
-        if success and self.api_version != 'v1':
+        if success:
             self.session_token = token_or_message
         return success, token_or_message
 
@@ -303,7 +301,7 @@ class GLPIClient:
             if method.upper() != "GET":
                 headers["Content-Type"] = "application/json"
                 
-def do_request(base: str):
+        def do_request(base: str):
             url = f"{base}{endpoint}"
             log.debug(f"{method} request to {url} params={params} payload={payload}")
             if method.upper() == "GET":
@@ -590,7 +588,7 @@ def do_request(base: str):
                     log.debug(f"Found v1 match for {itemtype} '{query}': ID {response['data'][0]['2']}")
                     return response['data'][0]['2']
                 else:
-                    log.warning(f'1404: No Result Matching {query} in {itemtype} (v1 fallback)')
+                    log.warning(f'1404: No Result Matching {query} in {itemtype}')
                     return 1404
                     
             except Exception as e:
@@ -695,9 +693,9 @@ def do_request(base: str):
         # 2. Handle Operating System Link
         if data.get("os"):
             log.debug(f"Linking Operating System to device ID {device_id}")
-            os_id = self.getId("OperatingSystem", data.get("os"))
-            os_version_id = self.getId("OperatingSystemVersion", data.get("os_version"))
-            os_edition_id = self.getId("OperatingSystemEdition", data.get("os_edition"))
+            os_id = self.getId("OperatingSystem", data.get("os")),
+            os_version_id = self.getId("OperatingSystemVersion", data.get("os_version")),
+            os_edition_id = self.getId("OperatingSystemEdition", data.get("os_edition")),
 
             if self.api_version == "v2":
                 if os_id and os_id not in [1403, 1404]:
