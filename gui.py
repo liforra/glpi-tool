@@ -10,7 +10,7 @@ import threading
 import json
 import sys
 import webbrowser
-import csv
+import re
 # Version Management
 APP_VERSION = "0.9.1"
 
@@ -1031,6 +1031,27 @@ class AddComputerFrame(ttk.Frame):
             self.after(0, self._handle_gather_error, str(e))
     
     def _update_fields_with_system_info(self, info):
+        # Simplify RAM information for better GLPI matching
+        if "ram" in info and info["ram"] != "Unknown":
+            # Example: "SO-DIMM DDR4 16GB 3200MHz" -> "16 GB"
+            # Example: "DDR4 8 GB" -> "8 GB"
+            match = re.search(r'(\d+)\s*GB', info["ram"], re.IGNORECASE)
+            if match:
+                info["ram"] = f"{match.group(1)} GB"
+            else:
+                # If a simpler "X GB" format cannot be extracted,
+                # attempt a fallback to just the numerical GB value if available
+                numeric_gb_match = re.search(r'^(\d+)', info["ram"])
+                if numeric_gb_match:
+                    info["ram"] = f"{numeric_gb_match.group(1)} GB"
+                else:
+                    # If still not parsable to a simple "X GB", consider setting to "Unknown"
+                    # or leave as is if the original might still be a valid, albeit specific, entry.
+                    # For now, we leave it as is if we can't simplify to "X GB".
+                    pass # Keep original if not parsable to just size
+        
+        # Processor already cleaned by _clean_processor_name in system_info.py
+
         self._set_form_data(info)
         updated_fields = [k for k, v in info.items() if v and v != "Unknown"]
         self._update_status(f"System info gathered successfully - {len(updated_fields)} fields updated", "green")
