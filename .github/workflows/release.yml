@@ -24,7 +24,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Replace version in gui.py
-        run: sed -i "s/APP_VERSION = ".*"/APP_VERSION = "${{ needs.get-version.outputs.sha_short }}"/" gui.py
+        run: sed -i 's/^APP_VERSION = .*/APP_VERSION = "${{ needs.get-version.outputs.sha_short }}"/' gui.py
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
