@@ -12,7 +12,7 @@ jobs:
       sha_short: ${{ steps.vars.outputs.sha_short }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Get short commit hash
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
@@ -22,11 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Replace version in gui.py
         run: sed -i "s/APP_VERSION = ".*"/APP_VERSION = "${{ needs.get-version.outputs.sha_short }}"/" gui.py
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
       - name: Install dependencies
@@ -37,7 +37,7 @@ jobs:
       - name: Build with setup.py
         run: python setup.py sdist bdist_wheel
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
           path: dist/
@@ -47,11 +47,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Replace version in gui.py
         run: (Get-Content gui.py) -replace 'APP_VERSION = ".*"', 'APP_VERSION = "${{ needs.get-version.outputs.sha_short }}"' | Set-Content gui.py
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
       - name: Install dependencies
@@ -63,7 +63,7 @@ jobs:
         run: |
           pyinstaller --onefile --windowed --add-data "assets;assets" --name "GLPI-Client-${{ needs.get-version.outputs.sha_short }}" gui.py
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: windows-artifact
           path: dist/GLPI-Client-${{ needs.get-version.outputs.sha_short }}.exe
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Create Release
