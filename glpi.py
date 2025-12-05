@@ -135,6 +135,7 @@ def getId(itemtype, query):
 getID = getId
 getid = getId
 
+def add(itemtype, data):
     if itemtype == "Computer": 
         log.debug('Reached add: Computer')
         
@@ -288,7 +289,7 @@ if __name__ == "__main__":
     
     # This is a placeholder for testing. In the GUI, the token is loaded from config.
     try:
-        init_glpi("PLEASE_REPLACE_IN_CONFIG_FILE") # Replace with a valid token for testing
+        init_glpi("PLEASE_REPLACE_IN_CONFIG_FILE", "https://example.com/glpi/apirest.php") # Replace with a valid token for testing
     except ValueError as e:
         log.error(e)
         exit(1)
